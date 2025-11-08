@@ -1,16 +1,20 @@
-Dear Support Team,
+Weekly Work Summary – Week of Nov 3–7, 2025
+1. Kafka Message Dump via SEM Portal
 
-I hope this email finds you well. I am writing to bring your attention to an issue we are experiencing with our production brokers that is impacting our Kafka consumer performance.
+Created JIRA tickets for enabling Kafka message dump functionality through the SEM self-service portal.
 
-Currently, we have observed that most of our production brokers are reaching the maximum limit of FETCH_SESSION slots (max.incremental.fetch.session.cache.slots). To mitigate this issue and improve our consumer efficiency, we kindly request an increase in the FETCH_SESSION slots from the current default value to 10,000. We believe that this adjustment will better align with our production needs and alleviate the current bottleneck.
+Had discussions with Priya and Rajiv D to review current SEM portal capabilities and assess integration feasibility.
 
-In addition, we would also like to propose an adjustment to the group initial rebalancing delay (group.initial.rebalancing.delay.ms). Currently, it is set to 0 milliseconds, resulting in immediate rebalancing upon any consumer joining or leaving a group. To provide a more stable and controlled rebalancing process, we kindly request to adjust the delay to 3 seconds (group.initial.rebalancing.delay.ms=3000).
+Collaborated with Rajiv D to develop an initial plan and design diagram outlining the approach for enabling Kafka message dumps within SEM.
 
-To implement these changes, we kindly ask you to add the following new broker properties:
+2. Infrastructure Enhancements and Upgrades
 
-max.incremental.fetch.session.cache.slots=10000
-group.initial.rebalancing.delay.ms=3000
+Created JIRA tickets for the NIC upgrade (25 Gb network enhancement), CI/CD pipeline improvements, and Load Balancer enablement for Confluent services.
 
-We believe that these adjustments will greatly improve the performance and stability of our Kafka ecosystem, allowing our consumers to handle larger workloads more efficiently.
+Reviewed the 25 Gb NIC upgrade plan with Ganesh and recommended executing the change in two phases:
 
-If you require any additional information or have any concerns regarding these requested changes, please let us know. We appreciate your support and prompt attention to this matter.
+Phase 1: Upgrade NICs and network connectivity.
+
+Phase 2: Apply broker configuration changes.
+
+Coordinated the data migration approach and prepared the handover to the Network and SA teams to perform the NIC upgrade.
