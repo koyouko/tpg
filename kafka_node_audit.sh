@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
 # Kafka Node Audit for RHEL8 + Confluent 7.6.2
-# by RR v1.7
+# by RR v1.8
 #
 # Readiness audit for Kafka brokers on RHEL 8 (VM or bare-metal).
 # Validates: tuned profile (VM ⇒ virtual-guest; physical ⇒ high-performance),
@@ -250,13 +250,17 @@ else
 
   check(){
     local k=$1 want=$2 v n
-    v="$(get_prop "$SERVER_PROPS" "$k" || true)"
+    v="$(get_prop "$SERVER_PROPS" "$k" 2>/dev/null || true)"
     if [[ -z "${v:-}" ]]; then
       warn "$k not set (rec $want)"
       return
     fi
+    n=""  # predeclare to avoid 'unbound variable' in older bash under set -u
     n="$(awk 'match($0,/[0-9]+/){print substr($0,RSTART,RLENGTH)}' <<<"$v" 2>/dev/null || true)"
-    n="${n:-0}"
+    if [[ -z "${n:-}" ]]; then
+      warn "$k has invalid or missing numeric value ('$v', rec $want)"
+      return
+    fi
     if [[ "$n" =~ ^[0-9]+$ ]]; then
       (( n < want )) && warn "$k=$n (LOW, rec $want)" || pass "$k=$n OK"
     else
