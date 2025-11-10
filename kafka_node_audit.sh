@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
 # Kafka Node Audit for RHEL8 + Confluent 7.6.2
-# by RR v1.8
+# by RR v1.9
 #
 # Readiness audit for Kafka brokers on RHEL 8 (VM or bare-metal).
 # Validates: tuned profile (VM ⇒ virtual-guest; physical ⇒ high-performance),
@@ -166,6 +166,7 @@ fi
 section "ULIMITS FOR SERVICE USER (${SERVICE_USER})"
 if id "$SERVICE_USER" >/dev/null 2>&1; then
   read_ul(){ sudo -u "$SERVICE_USER" bash -lc "$1" 2>/dev/null || echo "N/A"; }
+
   nofile="$(read_ul 'ulimit -n')"
   nproc="$(read_ul 'ulimit -u')"
   memlock="$(read_ul 'ulimit -l')"
@@ -173,9 +174,26 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
   printf "Current (runtime) ulimit values:\n"
   printf "  nofile : %s\n  nproc  : %s\n  memlock: %s\n" "${nofile:-N/A}" "${nproc:-N/A}" "${memlock:-N/A}"
 
-  (( ${nofile:-0} >= ${MIN_NOFILE:-100000} )) && pass "nofile >= ${MIN_NOFILE}" || warn "nofile < ${MIN_NOFILE}"
-  (( ${nproc:-0}  >= ${MIN_NPROC:-4096}    )) && pass "nproc >= ${MIN_NPROC}"   || warn "nproc < ${MIN_NPROC}"
-  [[ "${memlock:-}" == "unlimited" || "${memlock:-}" == "N/A" ]] && pass "memlock unlimited" || warn "memlock not unlimited"
+  # numeric-safe guards (avoid N/A causing set -u errors in (( )))
+  if [[ "${nofile:-}" =~ ^[0-9]+$ ]]; then
+    (( nofile >= ${MIN_NOFILE:-100000} )) && pass "nofile >= ${MIN_NOFILE}" || warn "nofile < ${MIN_NOFILE}"
+  else
+    warn "nofile not numeric (got '${nofile:-N/A}')"
+  fi
+
+  if [[ "${nproc:-}" =~ ^[0-9]+$ ]]; then
+    (( nproc  >= ${MIN_NPROC:-4096}    )) && pass "nproc >= ${MIN_NPROC}"   || warn "nproc < ${MIN_NPROC}"
+  else
+    warn "nproc not numeric (got '${nproc:-N/A}')"
+  fi
+
+  if [[ "${memlock:-}" == "unlimited" || "${memlock:-}" == "N/A" ]]; then
+    pass "memlock unlimited"
+  elif [[ "${memlock:-}" =~ ^[0-9]+$ ]]; then
+    warn "memlock is finite (${memlock})"
+  else
+    warn "memlock unknown (got '${memlock:-N/A}')"
+  fi
 
   hr
   echo "Persistent limits (from /etc/security/limits.conf and limits.d/*.conf):"
@@ -197,7 +215,6 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
     fi
   done
   (( found_limits == 0 )) && warn "No persistent limits for ${SERVICE_USER} found."
-
 else
   warn "User ${SERVICE_USER} not found."
 fi
@@ -255,7 +272,7 @@ else
       warn "$k not set (rec $want)"
       return
     fi
-    n=""  # predeclare to avoid 'unbound variable' in older bash under set -u
+    n=""  # predeclare for set -u safety on older bash
     n="$(awk 'match($0,/[0-9]+/){print substr($0,RSTART,RLENGTH)}' <<<"$v" 2>/dev/null || true)"
     if [[ -z "${n:-}" ]]; then
       warn "$k has invalid or missing numeric value ('$v', rec $want)"
