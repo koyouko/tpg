@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
 # Kafka Node Audit for RHEL8 + Confluent 7.6.2
-# by RR v1.6
+# by RR v1.7
 #
-# Purpose:
-#   Readiness audit for Kafka brokers on RHEL 8 (VM or bare-metal).
-#   Validates tuned profile (VM ⇒ virtual-guest; physical ⇒ high-performance),
-#   THP, sysctl, NICs/link/ring buffers, bonding, ulimits (runtime + persistent),
-#   Java & Confluent versions, and key Kafka thread settings with recommendations.
+# Readiness audit for Kafka brokers on RHEL 8 (VM or bare-metal).
+# Validates: tuned profile (VM ⇒ virtual-guest; physical ⇒ high-performance),
+# THP, sysctl, NICs/link/ring buffers, bonding, ulimits (runtime + persistent),
+# Java & Confluent versions, and key Kafka thread settings with recommendations.
+# Outputs a concise SUMMARY with the server.properties path and recommended values.
 # ---------------------------------------------------------------------------
 
 set -euo pipefail
@@ -184,7 +184,6 @@ if id "$SERVICE_USER" >/dev/null 2>&1; then
   for file in /etc/security/limits.conf /etc/security/limits.d/*.conf; do
     [[ -f "$file" ]] || continue
     matches=""
-    # Show lines for user or wildcard * and only keys we care about
     matches="$(awk -v u="$SERVICE_USER" '
       $0 !~ /^[[:space:]]*#/ && NF>=4 {
         usr=$1; typ=$2; itm=$3; val=$4;
@@ -244,11 +243,26 @@ else
 
   printf "vCPUs: %d | Recommended -> net=%d io=%d fetchers=%d recovery=%d\n" "$VCPU" "$REC_NET" "$REC_IO" "$REC_REPF" "$REC_RECOVERY"
 
-  check(){ local k=$1 want=$2 v n; v="$(get_prop "$SERVER_PROPS" "$k" || true)"
-    [[ -z "${v:-}" ]] && { warn "$k not set (rec $want)"; return; }
-    n="$(awk 'match($0,/[0-9]+/){print substr($0,RSTART,RLENGTH)}' <<<"$v")"
-    [[ -z "${n:-}" ]] && { warn "$k has non-integer value '$v' (rec $want)"; return; }
-    (( n < want )) && warn "$k=$n (LOW, rec $want)" || pass "$k=$n OK"; }
+  # capture for final summary
+  SUMMARY_PROPS_PATH="$SERVER_PROPS"
+  SUMMARY_VCPUS="$VCPU"
+  SUMMARY_REC_STR="num.network.threads=$REC_NET, num.io.threads=$REC_IO, num.replica.fetchers=$REC_REPF, num.recovery.threads.per.data.dir=$REC_RECOVERY"
+
+  check(){
+    local k=$1 want=$2 v n
+    v="$(get_prop "$SERVER_PROPS" "$k" || true)"
+    if [[ -z "${v:-}" ]]; then
+      warn "$k not set (rec $want)"
+      return
+    fi
+    n="$(awk 'match($0,/[0-9]+/){print substr($0,RSTART,RLENGTH)}' <<<"$v" 2>/dev/null || true)"
+    n="${n:-0}"
+    if [[ "$n" =~ ^[0-9]+$ ]]; then
+      (( n < want )) && warn "$k=$n (LOW, rec $want)" || pass "$k=$n OK"
+    else
+      warn "$k has invalid value '$v' (rec $want)"
+    fi
+  }
 
   check num.network.threads $REC_NET
   check num.io.threads $REC_IO
@@ -260,3 +274,10 @@ fi
 
 section "KAFKA BROKER PROCESS"
 pgrep -f kafka.Kafka >/dev/null && pass "Kafka broker running." || warn "Kafka broker not running."
+
+# ===========================================================================
+
+section "SUMMARY"
+printf "server.properties: %s\n" "${SUMMARY_PROPS_PATH:-unknown}"
+printf "vCPUs            : %s\n" "${SUMMARY_VCPUS:-unknown}"
+printf "Recommended      : %s\n" "${SUMMARY_REC_STR:-unavailable}"
