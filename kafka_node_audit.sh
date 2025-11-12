@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# Kafka Node Audit for RHEL8 + Confluent 7.6.2
-# Compare system kernel tuning to cp-ansible recommendations.
+# Kafka Node Audit for RHEL8 + Confluent 7.6.2 +
+# Checks OS/network/kafka settings, compares sysctl to cp-ansible, can auto-apply if needed.
 # Flags: -apply    # Apply recommended kernel sysctl values at runtime
-#
-# Readiness audit for Kafka brokers on RHEL 8 (VM or bare-metal).
 # ---------------------------------------------------------------------------
 
 set -euo pipefail
@@ -53,7 +51,7 @@ read_ring_vals() {
   printf "%s %s %s %s" "${cur_rx:-}" "${cur_tx:-}" "${max_rx:-}" "${max_tx:-}"
 }
 
-# Parse for -apply flag
+# Flag for -apply
 APPLY=0
 for arg in "$@"; do
     [[ "$arg" == "-apply" ]] && APPLY=1
@@ -172,6 +170,7 @@ mapfile -t ifaces < <(ls -1 /sys/class/net | grep -vE '^(lo)$' || true)
 printf "Detected interfaces: %s\n" "${ifaces[*]:-none}"
 
 has25g=0
+declare -A iface_25g
 for i in "${ifaces[@]}"; do
   [[ -d "/proc/net/bonding/$i" ]] && continue
   state="$(cat "/sys/class/net/$i/operstate" 2>/dev/null || echo N/A)"
@@ -179,7 +178,11 @@ for i in "${ifaces[@]}"; do
   speed="$(ethtool "$i" 2>/dev/null | awk -F': ' '/Speed/{print $2}')"
   duplex="$(ethtool "$i" 2>/dev/null | awk -F': ' '/Duplex/{print $2}')"
   printf "\nInterface: %s\n  State : %s\n  MTU   : %s\n  Speed : %s\n  Duplex: %s\n" "$i" "$state" "$mtu" "$speed" "$duplex"
-  [[ "${speed:-}" =~ 25000|25Gb|25G ]] && { pass "25Gb capable NIC: $i ($speed)"; has25g=1; }
+  if [[ "${speed//[[:space:]]/}" =~ ^25Gb ]]; then
+    pass "25Gb capable NIC: $i ($speed)"
+    has25g=1
+    iface_25g["$i"]=1
+  fi
 
   if vals="$(read_ring_vals "$i")"; then
     set -- $vals; cur_rx="$1"; cur_tx="$2"; max_rx="$3"; max_tx="$4"
@@ -199,6 +202,43 @@ for i in "${ifaces[@]}"; do
   fi
 done
 (( has25g == 1 )) && pass "At least one 25Gb NIC detected" || warn "No 25Gb NIC detected by speed."
+
+section "ROUTING & STATIC ROUTES"
+if has_cmd ip; then
+  default_route=$(ip route show default 2>/dev/null | head -n1)
+  printf "Default Route : %s\n" "${default_route:-none}"
+
+  default_gw=$(awk '/^default / {for (i=1;i<=NF;i++) if ($i=="via") print $(i+1)}' <<< "$default_route")
+  printf "Default Gateway: %s\n" "${default_gw:-none}"
+
+  mapfile -t static_routes < <(ip route | grep -v '^default' | grep -v '^linkdown' | grep -v '^unreachable')
+
+  if (( ${#static_routes[@]} > 0 )); then
+    info "Static routes present:"
+    for route in "${static_routes[@]}"; do
+      printf "  %s\n" "$route"
+    done
+  else
+    info "No static routes found."
+  fi
+
+  found_static_25g=0
+  for route in "${static_routes[@]}"; do
+    iface=$(awk '{for (i=1;i<=NF;i++) {if ($i=="dev") print $(i+1)}}' <<< "$route")
+    if [[ -n "${iface_25g[$iface]:-}" ]]; then
+      pass "Static route uses 25Gb interface: $route"
+      found_static_25g=1
+    else
+      [[ -n "$iface" ]] && warn "Static route on non-25Gb interface: ${iface} (${route})"
+    fi
+  done
+
+  if (( ${#static_routes[@]} > 0 )) && (( found_static_25g == 0 )); then
+    warn "No static routes configured via 25Gb network interface(s)."
+  fi
+else
+  warn "'ip' command not available; cannot inspect routing table."
+fi
 
 section "BONDING"
 if ls /proc/net/bonding/* >/dev/null 2>&1; then
@@ -273,21 +313,31 @@ else
 fi
 
 section "JAVA & CONFLUENT VERSIONS"
-if has_cmd java; then info "Java: $(java -version 2>&1 | head -n1)"; else warn "Java not found in PATH"; fi
+if has_cmd java; then
+  info "Java: $(java -version 2>&1 | head -n1)"
+else
+  warn "Java not found in PATH"
+fi
+
 if [[ -d /opt/confluent ]]; then
-  verfile=$(find /opt/confluent -maxdepth 2 -name 'confluent.version' 2>/dev/null | head -n1 || true)
-  [[ -n "${verfile:-}" ]] && pass "Confluent Platform version: $(cat "$verfile") (target: 7.6.2)" \
-                          || warn "Confluent version file not found."
+  if [[ -x /opt/confluent/latest/bin/kafka-topics ]]; then
+    verout=$(/opt/confluent/latest/bin/kafka-topics --version 2>&1 | head -n1)
+    if [[ -n "$verout" ]]; then
+      pass "Confluent Platform detected: $verout"
+    else
+      warn "Could not determine Confluent version from kafka-topics --version"
+    fi
+  else
+    warn "/opt/confluent/latest/bin/kafka-topics not executable or not found"
+  fi
 else
   warn "/opt/confluent not found (OK if not installed yet)."
 fi
 
 section "KAFKA server.properties KEY CHECKS + RECOMMENDATIONS"
-declare -a CANDIDATE_PROPS=(/etc/kafka/server.properties /etc/confluent-server/server.properties /opt/confluent/etc/kafka/server.properties)
-SERVER_PROPS=$(for f in "${CANDIDATE_PROPS[@]}"; do [[ -r "$f" ]] && echo "$f"; done | head -n1)
-
-if [[ -z "${SERVER_PROPS:-}" ]]; then
-  warn "Could not locate server.properties. Specify the correct path if non-standard."
+SERVER_PROPS="/opt/confluent/latest/etc/kafka/server.properties"
+if [[ ! -r "$SERVER_PROPS" ]]; then
+  warn "Could not locate server.properties at $SERVER_PROPS."
 else
   pass "Using server.properties: $SERVER_PROPS"
 
@@ -317,7 +367,7 @@ else
       warn "$k not set (rec $want)"
       return
     fi
-    n="" 
+    n=""
     n="$(awk 'match($0,/[0-9]+/){print substr($0,RSTART,RLENGTH)}' <<<"$v" 2>/dev/null || true)"
     if [[ -z "${n:-}" ]]; then
       warn "$k has invalid or missing numeric value ('$v', rec $want)"
