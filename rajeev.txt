@@ -1,20 +1,25 @@
-Weekly Work Summary – Week of Nov 3–7, 2025
-1. Kafka Message Dump via SEM Portal
+Weekly Work Summary (Nov 10, 2025 – Nov 14, 2025)
 
-Created JIRA tickets for enabling Kafka message dump functionality through the SEM self-service portal.
+JIRA / Kanban Board Updates:
+All ongoing items—Kafka Dump, Kafka Audit Script, Pre/Post Verification Script for Network Changes, CP-Ansible, and the PoC for Load Balancer on Physical Kafka Servers—have been added and organized in the Kanban board for active tracking.
 
-Had discussions with Priya and Rajiv D to review current SEM portal capabilities and assess integration feasibility.
+CP-Ansible Work (JIRA Task):
+Continued progress on the CP-Ansible JIRA task, including reviewing inventory setup, verifying configuration parameters, and aligning with Confluent best practices.
 
-Collaborated with Rajiv D to develop an initial plan and design diagram outlining the approach for enabling Kafka message dumps within SEM.
+Kafka Dump:
 
-2. Infrastructure Enhancements and Upgrades
+Submitted a new request for the Artifactory report required for the Kafka dump workflow.
 
-Created JIRA tickets for the NIC upgrade (25 Gb network enhancement), CI/CD pipeline improvements, and Load Balancer enablement for Confluent services.
+Completed the Kafka dump flow diagram, documenting the full journey from message dump to Artifactory upload.
 
-Reviewed the 25 Gb NIC upgrade plan with Ganesh and recommended executing the change in two phases:
+Kafka Server Audit Script:
+Successfully completed the Kafka server audit script, covering ulimits, configuration checks, JVM parameters, and Kafka-related validations.
 
-Phase 1: Upgrade NICs and network connectivity.
+Pre/Post Verification Script – Network Changes:
+Advanced work on the verification script to validate Kafka broker and client behavior before and after upcoming network configuration updates.
 
-Phase 2: Apply broker configuration changes.
+PoC – Load Balancer for Physical Kafka Servers:
+Continued planning and structuring the PoC for implementing an LB setup on the physical Kafka cluster.
 
-Coordinated the data migration approach and prepared the handover to the Network and SA teams to perform the NIC upgrade.
+Confluent Office Hours:
+Had a detailed technical discussion with Amit (Confluent) during office hours for guidance and best practices on CP-Ansible and Kafka configuration approaches.
