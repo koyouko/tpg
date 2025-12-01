@@ -1,0 +1,157 @@
+h1. Kafka Dump Utility – Full Documentation (Combined Diagrams Included)
+
+This page consolidates the full architecture, sequence flow, decision workflows, error flow, and troubleshooting diagrams for the Kafka Dump Utility.
+
+h2. 1. High-Level Architecture Diagram
+
+{code:mermaid}
+flowchart LR
+
+A[User / Self-Service Portal<br/>(INC, REQ, Topic, OTP)] --> B[Backend Service<br/>(Triggers kafka_dump.sh)]
+B --> C[kafka_dump.sh Script]
+
+C --> D[(Kafka Cluster)]
+C --> E[(GPG AES-256 Encryption)]
+C --> F[(Audit Log<br/>/var/log/confluent/kafka_dump/audit.log)]
+C --> G[(Temporary Workspace<br/>/var/log/confluent/kafka_dump/INC/REQ/TOPIC)]
+
+E --> H[(Encrypted Artifact<br/>REQ.tar.gz.gpg)]
+H --> I[(Artifactory<br/>kafka-dump/INC/REQ/TOPIC)]
+{code}
+
+h2. 2. End-to-End Sequence Diagram
+
+{code:mermaid}
+sequenceDiagram
+autonumber
+
+participant U as User / Portal
+participant API as Backend API
+participant S as kafka_dump.sh
+participant K as Kafka Cluster
+participant G as GPG Encryption
+participant A as Artifactory
+participant L as Audit Log
+
+U->>API: Submit INC, REQ, Topic, OTP
+API->>S: Execute kafka_dump.sh with parameters
+
+S->>S: Validate inputs
+S->>S: Check disk usage
+S->>S: Load cluster_map.json
+
+S->>K: Consume topic data
+K-->>S: Messages + metadata
+
+S->>S: Create metadata.json
+S->>G: Encrypt tar.gz with OTP
+G-->>S: Encrypted file
+
+S->>A: Upload encrypted artifact
+A-->>S: Upload OK
+
+S->>L: Write SUCCESS audit log
+
+S-->>API: JSON success output
+API-->>U: Artifactory URL + Message count
+
+S->>S: Cleanup temporary directory
+
+
+{code}
+
+h2. 3. Troubleshooting Decision Tree
+
+{code:mermaid}
+flowchart TD
+
+A[Issue Detected] --> B{Did script return JSON status=ERROR?}
+
+B -- No --> C[Check audit.log manually]
+C --> Z[Identify root cause]
+
+B -- Yes --> D{Error contains 'Disk usage'?}
+D -- Yes --> D1[Free space or extend volume] --> Z
+
+D -- No --> E{Error contains 'Cluster/env not found'?}
+E -- Yes --> E1[Fix cluster_map.json] --> Z
+
+E -- No --> F{Error contains 'Kafka dump failed'?}
+F -- Yes --> F1[Check ACL, mTLS config,\nbrokers, network] --> Z
+
+F -- No --> G{Error contains 'Upload failed'?}
+G -- Yes --> G1[Check Artifactory access,\ncredentials, network] --> Z
+
+G -- No --> H{Error contains 'JSON missing'?}
+H -- Yes --> H1[Ensure cluster_map.json exists] --> Z
+
+H -- No --> I[Check OTP, GPG installation,\npermissions, filesystem]
+
+I --> Z[Resolution]
+{code}
+
+h2. 4. Error Flow Diagram
+
+{code:mermaid}
+flowchart TD
+
+A[Start Script] --> B{Arguments valid?}
+B -- No --> B1[Return ERROR + Exit]
+
+B -- Yes --> C{Disk usage < 85%?}
+C -- No --> C1[Write FAILED audit log\nReturn JSON error\nExit]
+
+C -- Yes --> D{cluster_map.json present?}
+D -- No --> D1[FAILED audit log\nReturn JSON error\nExit]
+
+D -- Yes --> E{Kafka Dump Succeeds?}
+E -- No --> E1[FAILED audit log\nReturn JSON\nExit]
+
+E -- Yes --> F{tar/gzip successful?}
+F -- No --> F1[Return ERROR\nExit]
+
+F -- Yes --> G{GPG encryption ok?}
+G -- No --> G1[Return ERROR\nExit]
+
+G -- Yes --> H{Upload succeeds?}
+H -- No --> H1[FAILED audit log\nReturn ERROR\nExit]
+
+H -- Yes --> I[SUCCESS audit log entry]
+I --> J[Secure cleanup]
+J --> K[Exit SUCCESS]
+{code}
+
+h2. 5. Full System Overview Diagram
+
+{code:mermaid}
+flowchart TB
+
+U[User / Portal] --> API[Backend API Layer]
+API --> S[kafka_dump.sh Execution]
+
+S --> V1[Validate Inputs]
+V1 --> V2[Check Disk Usage]
+V2 --> V3[Load cluster_map.json]
+
+V3 --> KD[Kafka Dump]
+KD --> KD2{Dump Success?}
+
+KD2 -- No --> ERR1[FAILED audit log<br/>Return ERROR]
+ERR1 --> CLEANUP
+
+KD2 -- Yes --> PKG[tar + gzip creation]
+PKG --> ENC[GPG AES256 Encryption]
+ENC --> SUM[Generate SHA256 checksum]
+SUM --> UP[Upload to Artifactory]
+
+UP --> UP2{Upload Success?}
+
+UP2 -- No --> ERR2[FAILED audit log<br/>Return ERROR]
+ERR2 --> CLEANUP
+
+UP2 -- Yes --> OK[SUCCESS audit log]
+
+OK --> CLEANUP[Secure Cleanup<br/>Remove per-request directory]
+
+CLEANUP --> END[Return SUCCESS JSON]
+{code}
