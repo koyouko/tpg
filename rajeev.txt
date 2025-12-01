@@ -1,25 +1,54 @@
-Weekly Work Summary (Nov 10, 2025 – Nov 14, 2025)
+Weekly Work Summary (Nov 24, 2025 – Nov 28, 2025)
+Focus Area: Kafka Dump
+Kafka Dump – Architecture & Implementation Updates
 
-JIRA / Kanban Board Updates:
-All ongoing items—Kafka Dump, Kafka Audit Script, Pre/Post Verification Script for Network Changes, CP-Ansible, and the PoC for Load Balancer on Physical Kafka Servers—have been added and organized in the Kanban board for active tracking.
+Continued major work on the Kafka Dump automation, refining the workflow and improving script reliability.
 
-CP-Ansible Work (JIRA Task):
-Continued progress on the CP-Ansible JIRA task, including reviewing inventory setup, verifying configuration parameters, and aligning with Confluent best practices.
+Completed the Kafka dump flow diagram, capturing the full process from message retrieval → secure encryption → storage in Artifactory.
 
-Kafka Dump:
+Began aligning the Kafka Dump logic with existing Citi security and tooling standards.
 
-Submitted a new request for the Artifactory report required for the Kafka dump workflow.
+Migration from Python to Bash
 
-Completed the Kafka dump flow diagram, documenting the full journey from message dump to Artifactory upload.
+Initially planned Kafka Dump automation in Python, but encountered a key blocker:
 
-Kafka Server Audit Script:
-Successfully completed the Kafka server audit script, covering ulimits, configuration checks, JVM parameters, and Kafka-related validations.
+The required Confluent Python libraries (e.g., confluent-kafka-python) are not available in Citi’s approved internal repositories.
 
-Pre/Post Verification Script – Network Changes:
-Advanced work on the verification script to validate Kafka broker and client behavior before and after upcoming network configuration updates.
+Due to strict dependency controls, adding or requesting new external libraries would introduce delays and approvals.
 
-PoC – Load Balancer for Physical Kafka Servers:
-Continued planning and structuring the PoC for implementing an LB setup on the physical Kafka cluster.
+To avoid dependency bottlenecks and ensure compatibility with Citi’s hardened Linux environments, the implementation has been switched from Python to pure Bash.
 
-Confluent Office Hours:
-Had a detailed technical discussion with Amit (Confluent) during office hours for guidance and best practices on CP-Ansible and Kafka configuration approaches.
+Bash allows:
+
+Direct use of Kafka CLI tools (kafka-console-consumer, kafka-dump-log, etc.)
+
+Seamless integration with GPG encryption
+
+Native compatibility with server environments
+
+Faster deployment without external library dependencies
+
+Artifactory Integration
+
+Submitted a request for the updated Artifactory report, required for validating the upload paths and ensuring automated dump delivery aligns with internal compliance.
+
+Validated the output structure and naming convention for encrypted dumps (.tar.gz.gpg) for Artifactory ingestion.
+
+Script Enhancements & Workflow Refinement
+
+Improved internal logging and workspace structuring under:
+/var/log/confluent/kafka_dump/ (per INC/REQ/Topic)
+
+Updated the encryption stage using AES-256 via GPG, ensuring compliance with Citi security policies.
+
+Added audit logging to track:
+
+Who triggered the dump
+
+The request ID (INC / REQ)
+
+Timestamp
+
+Topic name
+
+Artifactory upload result
