@@ -1,0 +1,15 @@
+Frontend Self-Service Portal
+        ↓
+kafka_dump.sh (Secure Backend Script)
+        ↓
+Kafka Cluster
+        ↓
+GPG AES-256 Encryption
+        ↓
+Temporary Dump Workspace
+        ↓
+Encrypted Output (REQ.tar.gz.gpg)
+        ↓
+Artifactory (kafka-dump/INC/REQ/TOPIC)
+        ↓
+Audit Log (/var/log/.../audit.log)
