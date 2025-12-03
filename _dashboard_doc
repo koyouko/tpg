@@ -1,0 +1,367 @@
+h1. Kafka Estate Health – Executive Dashboard
+
+h2. 1. Purpose
+
+The purpose of this feature is to provide a single, high-level, real-time view of the health of all Kafka clusters managed by STP Estate Manager.
+
+The dashboard is targeted at:
+
+Executives and senior managers – quick “red/amber/green” view.
+
+SRE / Ops – fast identification of which cluster needs attention right now.
+
+h2. 2. Scope
+
+In scope:
+** Read-only health status for all on-prem and cloud Kafka clusters.
+** Aggregated “Kafka Estate Health Bar” on STP Estate Manager pages where Technology = Kafka.
+** Drill-down table view of all Kafka clusters with key health metrics.
+** Integration with existing monitoring/metrics stack (e.g. Prometheus, Control Center, AppD, etc.).
+
+Out of scope (Phase 1):
+** Alerting / paging flows (will continue to use existing tools).
+** Historical reporting and trends beyond a short look-back window (e.g. > 24 hours).
+** Automated remediation.
+
+h2. 3. High-Level Requirements
+
+h3. 3.1 Functional Requirements
+
+FR-1: Display an overall Kafka estate status (GREEN/AMBER/RED) in a top “Kafka Estate Health” bar.
+
+FR-2: Show counts of clusters by status:
+** Healthy (GREEN)
+** Warning (AMBER)
+** Critical (RED)
+
+FR-3: Show key global KPIs in the bar:
+** Total offline partitions
+** Total under-replicated partitions (URP) and number of affected clusters
+** Number of clusters with any broker down
+
+FR-4: The bar must show the “As of” timestamp and auto-refresh every N seconds (configurable, default 30s).
+
+FR-5: Clicking any part of the bar opens a Kafka Estate Dashboard (drill-down view) with a table of clusters.
+
+FR-6: Drill-down table columns (minimum):
+** Cluster Name
+** Environment (DEV / UAT / PROD, etc.)
+** Status (GREEN/AMBER/RED + numeric health score)
+** Brokers Up / Total Brokers
+** Offline Partitions
+** Under-Replicated Partitions
+** Max Disk Utilization %
+** p95 Request Latency (ms)
+** Last Updated
+
+FR-7: The drill-down table must support:
+** Filtering by environment and status
+** Sorting by status, name, latency, etc.
+
+FR-8: Each cluster row must have a “View Details” action linking to the relevant detailed monitoring tool (Grafana / Control Center / internal dashboard).
+
+FR-9: Health status must be computed per cluster based on a deterministic scoring model (see Section 5).
+
+h3. 3.2 Non-Functional Requirements
+
+NFR-1: Health data should be near real-time:
+** Target staleness: ≤ 30 seconds for PROD, ≤ 60 seconds for non-PROD.
+
+NFR-2: The health computation service must tolerate failure of one metrics backend (e.g. a single Prometheus instance) without impacting others.
+
+NFR-3: All APIs must be secured with existing Citi authN/authZ (same as current STP backend).
+
+NFR-4: UI should degrade gracefully:
+** If health API is unavailable, show “Status unavailable” message and last successful update (if available).
+
+h2. 4. Architecture Overview
+
+h3. 4.1 Components
+
+Kafka Clusters
+** Multiple on-prem / cloud clusters (DEV/UAT/PROD, etc.).
+
+Metrics / Monitoring Stack
+** Existing systems such as Prometheus, Confluent Control Center, AppDynamics, etc.
+
+Kafka Health Aggregator Service (new)
+** Stateless backend service that:
+*** Periodically queries the metrics backend(s).
+*** Calculates health scores and statuses per cluster.
+*** Caches the computed results in memory (and optionally in a lightweight store).
+*** Exposes REST APIs for STP Estate Manager UI.
+
+STP Estate Manager UI (existing)
+** Self Service → Execute Task page (Technology = Kafka).
+** New “Kafka Estate Health” bar component that calls the Health Aggregator API.
+** New Kafka Estate Dashboard (drill-down screen).
+
+h3. 4.2 Data Flow (high level)
+
+1. Health Aggregator pulls cluster metrics from Prometheus / Control Center every 15–30 seconds.
+2. Aggregator computes per-cluster health score and status (GREEN/AMBER/RED).
+3. Aggregator stores results in local cache.
+4. STP UI calls REST endpoint /api/kafka/health/summary to render top bar.
+5. On user click, UI calls /api/kafka/health/clusters for drill-down table.
+6. “View Details” links redirect to underlying monitoring dashboards per cluster.
+
+h2. 5. Health Scoring and Status Logic
+
+h3. 5.1 Metrics per Cluster
+
+Minimum metrics required:
+
+Availability
+** Number of brokers up vs total brokers.
+** Controller presence/health.
+
+Data Safety
+** Offline partitions (offline_partitions_count).
+** Under-replicated partitions (under_replicated_partitions – URP).
+** ISR shrink / expand events (optional / stretch).
+
+Performance
+** p95 and/or p99 request latency for produce and fetch.
+** Request error rate (% of failed requests).
+
+Capacity / Risk
+** Max disk usage % by broker.
+** CPU usage % (optional).
+** Network utilization vs NIC capacity (optional).
+
+h3. 5.2 Status Thresholds
+
+GREEN (Healthy)
+
+100% brokers up.
+
+Offline partitions = 0.
+
+URP = 0 (or small transient URP below a tuned threshold and duration).
+
+Disk usage < 80% on all brokers.
+
+p95 latency < 100 ms (tunable by environment).
+
+AMBER (Warning)
+
+At least one broker down but RF still maintains redundancy.
+
+URP > 0 but offline partitions = 0.
+
+Disk usage between 80% and 90% on any broker.
+
+p95 latency between 100 ms and 500 ms or modest error rate increase.
+
+RED (Critical)
+
+Any offline partitions > 0.
+
+Multiple brokers down such that RF or availability are at risk.
+
+Disk usage > 90% on any broker.
+
+p95 latency > 500 ms or significantly elevated error rates.
+
+h3. 5.3 Example Scoring Model (0–100)
+
+{code}
+score = 100
+
+if offline_partitions > 0:
+score -= 40
+
+if brokers_up < brokers_total:
+
+scale penalty by fraction of brokers down
+
+fraction_down = (brokers_total - brokers_up) / brokers_total
+score -= 25 * fraction_down
+
+if under_replicated_partitions > 0:
+
+cap penalty
+
+score -= min(15, 5 + log10(under_replicated_partitions + 1) * 10)
+
+if max_disk_pct >= 85:
+score -= 10
+
+if p95_latency_ms > 200:
+score -= 10
+
+Clamp
+
+if score < 0:
+score = 0
+{code}
+
+Mapping score → status:
+
+score ≥ 90 → GREEN
+
+70 ≤ score < 90 → AMBER
+
+score < 70 → RED
+
+Estate overall status = worst status across all in-scope clusters (typically PROD only, or PROD + key UAT).
+
+h2. 6. API Specification (Kafka Health Aggregator)
+
+h3. 6.1 GET /api/kafka/health/summary
+
+Purpose: Provide aggregated estate-level health for the top bar.
+
+Response (example):
+
+{code:language=json}
+{
+"overall_status": "AMBER",
+"overall_score": 86,
+"as_of": "2025-12-03T17:47:10Z",
+"counts": {
+"GREEN": 12,
+"AMBER": 3,
+"RED": 1
+},
+"top_issues": [
+{
+"cluster": "kafka-prod-nyc",
+"status": "RED",
+"reason": "Offline partitions: 2; broker 5 down"
+},
+{
+"cluster": "kafka-prod-lon",
+"status": "AMBER",
+"reason": "URP: 15 partitions"
+}
+]
+}
+{code}
+
+h3. 6.2 GET /api/kafka/health/clusters
+
+Query parameters:
+
+environment (optional): DEV/UAT/PROD etc.
+
+status (optional): GREEN/AMBER/RED.
+
+name (optional): substring match on cluster name.
+
+Response (example):
+
+{code:language=json}
+[
+{
+"name": "kafka-prod-nyc",
+"environment": "PROD",
+"status": "RED",
+"score": 61,
+"brokers_up": 4,
+"brokers_total": 5,
+"offline_partitions": 2,
+"under_replicated": 20,
+"disk_max_pct": 87,
+"p95_latency_ms": 320,
+"monitoring_url": "https://monitoring/kafka-prod-nyc",
+"last_updated": "2025-12-03T17:47:10Z"
+},
+{
+"name": "kafka-prod-lon",
+"environment": "PROD",
+"status": "AMBER",
+"score": 82,
+"brokers_up": 6,
+"brokers_total": 6,
+"offline_partitions": 0,
+"under_replicated": 15,
+"disk_max_pct": 72,
+"p95_latency_ms": 110,
+"monitoring_url": "https://monitoring/kafka-prod-lon",
+"last_updated": "2025-12-03T17:47:10Z"
+}
+]
+{code}
+
+h3. 6.3 GET /api/kafka/health/clusters/{clusterId}
+
+Returns detailed health for a single cluster for use in future advanced views (per-cluster page).
+
+h2. 7. UI Design
+
+h3. 7.1 Kafka Estate Health Bar
+
+Placement: top section of STP Estate Manager when “Technology = Kafka” is selected (e.g. above “Select Task”).
+
+Elements:
+** Title: Kafka Estate Health (Live).
+** Overall status pill: Overall: HEALTHY / DEGRADED / CRITICAL.
+** Status counts: 🟢 Healthy: N | 🟠 Warning: M | 🔴 Critical: K.
+** KPI chips:
+*** Offline Partitions: X
+*** URP: Y (Z clusters)
+*** Broker Down: B clusters
+** “As of <timestamp> · Auto-refresh in N s” on the right.
+
+Behaviour:
+** Auto-refresh summary every 30 seconds.
+** Click anywhere on the bar → open Kafka Estate Dashboard (modal or new tab/section).
+** Click on a specific status chip filters table by status.
+
+h3. 7.2 Kafka Estate Dashboard (Drill-down)
+
+Filters at top:
+** Environment (dropdown).
+** Status (multi-select: GREEN/AMBER/RED).
+** Search by cluster name.
+
+Table columns:
+** Cluster Name (with link to monitoring URL).
+** Environment.
+** Status (coloured pill + score).
+** Brokers Up / Total.
+** Offline Partitions.
+** Under-Replicated Partitions.
+** Max Disk %.
+** p95 Latency (ms).
+** Last Updated.
+** Actions: View Details (deep link to external dashboard).
+
+h2. 8. Security & Access Control
+
+Reuse existing STP authentication (SSO/LDAP/etc.).
+
+Only users with appropriate roles (e.g. Kafka Ops, Platform Team, Tech Execs) can view Kafka health.
+
+No credentials for Kafka clusters are exposed via the UI; the aggregator uses service accounts and secured connections to metrics backends.
+
+h2. 9. Implementation Plan
+
+Phase 1:
+** Implement Kafka Health Aggregator service with:
+*** Metrics ingestion from existing monitoring stack for a subset of PROD clusters.
+*** Basic health scoring and status mapping.
+** Implement /summary and /clusters endpoints.
+** Add Kafka Estate Health bar to STP for Technology = Kafka.
+** Add drill-down table with read-only data.
+
+Phase 2:
+** Extend to all Kafka clusters (non-PROD).
+** Add small trend window (last 15–30 minutes) per cluster.
+** Integrate with incident management links (ServiceNow, etc.).
+
+Phase 3:
+** Historical reporting / trends.
+** Custom per-cluster threshold overrides.
+** Hooks for automated runbooks.
+
+h2. 10. Open Questions
+
+Should overall status consider all environments or PROD only?
+
+Who owns and maintains the health scoring logic (Kafka Platform team vs Central SRE)?
+
+How often can we safely poll the metrics backend without impacting it (15s vs 30s vs 60s)?
+
+Do we need different thresholds per region/cluster (e.g. latency budgets)?
