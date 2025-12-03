@@ -1,0 +1,162 @@
+EPIC: Kafka Estate Health – Executive Dashboard
+
+Epic Goal:
+Provide a real-time, unified health view of all Kafka clusters in STP Estate Manager, enabling executives and platform teams to quickly understand estate-level status and drill down into problematic clusters.
+
+Story 1 — Create Kafka Health Aggregator Service
+
+Description: Build a backend service that collects Kafka cluster metrics and computes health scores.
+
+Acceptance Criteria:
+
+Service connects to Prometheus / Control Center API.
+
+Pull metrics every 15–30 seconds.
+
+Compute health score using scoring model.
+
+Cache results in memory.
+
+Logs failures and retries.
+
+Exposes internal health endpoint /internal/health.
+
+Story 2 — Define Cluster Health Scoring Model
+
+Description: Implement GREEN / AMBER / RED logic.
+
+Acceptance Criteria:
+
+GREEN if score ≥ 90.
+
+AMBER if 70 ≤ score < 90.
+
+RED if score < 70.
+
+Offline partitions always force RED.
+
+Score calculation documented and versioned.
+
+Unit tests included.
+
+Story 3 — Build Summary Endpoint /api/kafka/health/summary
+
+Acceptance Criteria:
+
+Returns overall estate status.
+
+Returns counts of GREEN/AMBER/RED clusters.
+
+Returns top issues.
+
+Returns timestamp.
+
+Max response time < 200 ms.
+
+Authentication via STP gateway.
+
+Story 4 — Build Cluster List Endpoint /api/kafka/health/clusters
+
+Acceptance Criteria:
+
+Supports filtering: environment, status, name.
+
+Returns all required fields (brokers, URP, offline partitions, latency, etc.).
+
+Max response time < 300 ms.
+
+Returns monitoring URL per cluster.
+
+Story 5 — Build Single Cluster Endpoint /clusters/{clusterId}
+
+Acceptance Criteria:
+
+Returns full metrics, score breakdown.
+
+Returns timestamp.
+
+Handles missing cluster gracefully.
+
+Story 6 — STP UI: Add Kafka Estate Health Bar Component
+
+Acceptance Criteria:
+
+Appears when Technology = Kafka.
+
+Shows overall status chip + counts + KPIs.
+
+Shows “As of” timestamp.
+
+Auto-refresh every 30 seconds.
+
+Clicking opens dashboard.
+
+Story 7 — STP UI: Drill-Down Dashboard
+
+Acceptance Criteria:
+
+Table with cluster rows.
+
+Filters for environment + status + text search.
+
+Sort columns.
+
+Integrates monitoring links.
+
+Displays last updated time.
+
+Story 8 — Implement Auto-Refresh Logic
+
+Acceptance Criteria:
+
+Configurable refresh interval.
+
+Visual indicator (spinning icon).
+
+Graceful fallback if API fails.
+
+No full page reload.
+
+Story 9 — Security & RBAC
+
+Acceptance Criteria:
+
+Only allowed roles can view Kafka health.
+
+Audit logs for access.
+
+JWT validation integrated with STP gateway.
+
+No sensitive Kafka credentials leaked.
+
+Story 10 — Performance & Load Testing
+
+Acceptance Criteria:
+
+API stable at 20 requests/sec.
+
+Aggregator handles 100+ clusters.
+
+No memory leak for 30-day continuous run.
+
+Story 11 — Monitoring & Alerts for Health Aggregator
+
+Acceptance Criteria:
+
+Service health exposed via STP Grafana.
+
+Alert if aggregator not updating within 2 minutes.
+
+Alert if metrics backend unreachable.
+
+Story 12 — Documentation (Confluence)
+
+Acceptance Criteria:
+
+API contract documented.
+
+Scoring model documented.
+
+Dashboard UX documented.
+
+Architecture diagram included.
