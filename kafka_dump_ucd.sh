@@ -1,36 +1,3 @@
-#!/bin/bash
-
-export INC="${p:INC_NUMBER}"
-export REQ="${p:REQ_NUMBER}"
-export KAFKA_BOOTSTRAP="${p:BOOTSTRAP_SERVERS}"
-export TOPIC="${p:KAFKA_TOPIC}"
-export OTP="${p:OTP_PASSWORD}"
-export REQUESTOR="${p:REQUESTOR}"
-
-export CLUSTER="${p:CLUSTER_NAME}"
-export ENV_NAME="${p:ENVIRONMENT_NAME}"
-
-export ARTIFACTORY_BASE_URL="${p:ARTIFACTORY_BASE_URL}"
-export ARTIFACTORY_USER="${p:ARTIFACTORY_USER}"
-export ARTIFACTORY_PASSWORD="${p:ARTIFACTORY_PASSWORD}"
-
-# For traceability in logs
-export UCD_RUN_ID="${p:componentProcess.run.id}"
-
-# Debug (mask sensitive values)
-echo "INC=$INC"
-echo "REQ=$REQ"
-echo "TOPIC=$TOPIC"
-echo "KAFKA_BOOTSTRAP=$KAFKA_BOOTSTRAP"
-echo "REQUESTOR=$REQUESTOR"
-echo "Cluster=$CLUSTER Env=$ENV_NAME"
-echo "Artifactory User=$ARTIFACTORY_USER"
-echo "UCD Run ID=$UCD_RUN_ID"
-
-chmod +x ${p:component.workspace}/scripts/kafka_dump.sh
-
-${p:component.workspace}/scripts/kafka_dump.sh
-
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -42,33 +9,25 @@ BASE_DIR="/var/log/confluent/kafka_dump"
 KAFKA_BIN_DIR_DEFAULT="/opt/confluent/latest/bin"
 DISK_THRESHOLD=85
 AUDIT_LOG="${BASE_DIR}/audit.log"
-CLUSTER_JSON="/etc/kafka_dump/cluster_map.json"
+
+# Kafka authentication config (fixed path)
+DEFAULT_CFG="/home/stekafka/config/stekafka_client.properties"
 
 # UCD RUN INFO
 UCD_RUN_ID="${UCD_RUN_ID:-"$(date +%s)"}"
 
 # ============================================================================
-# Resolve arguments and allow UCD environment overrides
+# Read UCD Environment Variables
 # ============================================================================
 
-ARG_INC="${1:-""}"
-ARG_REQ="${2:-""}"
-
-# UCD overrides
-INC="${INC:-${ARG_INC}}"
-REQ="${REQ:-${ARG_REQ}}"
-
-# Pull properties from UCD environment variables if set
 INC="${INC:-${UCD_INC_NUMBER:-""}}"
 REQ="${REQ:-${UCD_REQ_NUMBER:-""}}"
 TOPIC="${TOPIC:-${UCD_KAFKA_TOPIC:-""}}"
+
 KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-${UCD_BOOTSTRAP_SERVERS:-""}}"
 OTP="${OTP:-${UCD_OTP_PASSWORD:-""}}"
 REQUESTOR="${REQUESTOR:-${UCD_REQUESTOR:-"ucd-user"}}"
-CLUSTER="${CLUSTER:-${UCD_CLUSTER_NAME:-""}}"
-ENV_NAME="${ENV_NAME:-${UCD_ENVIRONMENT_NAME:-""}}"
 
-# Artifactory credentials from UCD fields
 ARTIFACTORY_BASE_URL="${ARTIFACTORY_BASE_URL:-${UCD_ARTIFACTORY_BASE_URL:-""}}"
 ARTIFACTORY_USER="${ARTIFACTORY_USER:-${UCD_ARTIFACTORY_USER:-""}}"
 ARTIFACTORY_PASSWORD="${ARTIFACTORY_PASSWORD:-${UCD_ARTIFACTORY_PASSWORD:-""}}"
@@ -92,7 +51,29 @@ fail() {
 [[ -z "$ARTIFACTORY_PASSWORD" ]] && fail "Artifactory password missing"
 
 # ============================================================================
-# Logging and Folder Setup
+# Normalize bootstrap servers (append :9094 if no port provided)
+# ============================================================================
+
+normalize_bootstrap() {
+    local input="$1"
+    local output=""
+    IFS=',' read -ra brokers <<< "$input"
+
+    for broker in "${brokers[@]}"; do
+        if [[ "$broker" =~ :[0-9]+$ ]]; then
+            output+="$broker,"
+        else
+            output+="${broker}:9094,"
+        fi
+    done
+
+    echo "${output%,}"
+}
+
+KAFKA_BOOTSTRAP="$(normalize_bootstrap "$KAFKA_BOOTSTRAP")"
+
+# ============================================================================
+# Setup Logging & Directories
 # ============================================================================
 
 mkdir -p "$BASE_DIR"
@@ -108,17 +89,18 @@ log() {
     shift
     local msg="$*"
 
-    printf '{"ts":"%s","level":"%s","ucdRunId":"%s","inc":"%s","req":"%s","topic":"%s","msg":"%s"}\n' \
+    printf '{"ts":"%s","level":"%s","runId":"%s","inc":"%s","req":"%s","topic":"%s","msg":"%s"}\n' \
         "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$level" "$UCD_RUN_ID" "$INC" "$REQ" "$TOPIC" "$msg" >> "$LOG_FILE"
 }
 
-log INFO "---- UCD Kafka Dump Execution Started ----"
-log INFO "Bootstrap: $KAFKA_BOOTSTRAP"
+log INFO "---- Kafka Dump Execution Started (UCD) ----"
+log INFO "Bootstrap servers: $KAFKA_BOOTSTRAP"
 log INFO "Topic: $TOPIC"
 
 # ============================================================================
-# Disk Check
+# Disk Space Check
 # ============================================================================
+
 usage_pct=$(df --output=pcent "$BASE_DIR" | tail -1 | tr -dc '0-9')
 if (( usage_pct >= DISK_THRESHOLD )); then
     fail "Disk usage too high (${usage_pct}%). Aborting."
@@ -127,6 +109,7 @@ fi
 # ============================================================================
 # Kafka Binary Resolution
 # ============================================================================
+
 KAFKA_BIN_DIR="${KAFKA_BIN_DIR:-$KAFKA_BIN_DIR_DEFAULT}"
 
 if [[ ! -x "$KAFKA_BIN_DIR/kafka-console-consumer" ]]; then
@@ -138,26 +121,27 @@ if [[ ! -x "$KAFKA_BIN_DIR/kafka-console-consumer" ]]; then
 fi
 
 # ============================================================================
-# Optional JSON-based security config
+# Fixed Consumer Config Required
 # ============================================================================
-KAFKA_SECURITY_OPTS=""
-if [[ -f "$CLUSTER_JSON" ]]; then
-    cfg=$(jq -r ".\"${CLUSTER}\".\"${ENV_NAME}\".config" "$CLUSTER_JSON" 2>/dev/null || echo "null")
-    if [[ "$cfg" != "null" ]]; then
-        KAFKA_SECURITY_OPTS="--consumer.config $cfg"
-        log INFO "Using security config: $cfg"
-    fi
+
+if [[ ! -f "$DEFAULT_CFG" ]]; then
+    fail "Required Kafka client config missing: $DEFAULT_CFG"
 fi
+
+KAFKA_SECURITY_OPTS="--consumer.config $DEFAULT_CFG"
+log INFO "Using fixed Kafka client config: $DEFAULT_CFG"
 
 # ============================================================================
 # Kafka Dump
 # ============================================================================
+
 DUMP_FILE="${WORKDIR}/${TOPIC}.jsonl"
 
 dump_kafka() {
     local attempt=1
     while (( attempt <= 3 )); do
         log INFO "Kafka dump attempt $attempt"
+
         if "$KAFKA_BIN_DIR/kafka-console-consumer" \
             --bootstrap-server "$KAFKA_BOOTSTRAP" \
             --topic "$TOPIC" \
@@ -169,11 +153,13 @@ dump_kafka() {
             --property print.headers=true \
             --property print.key=true \
             $KAFKA_SECURITY_OPTS > "$DUMP_FILE"; then
-                return 0
+            return 0
         fi
+
         sleep $((attempt * 2))
         (( attempt++ ))
     done
+
     return 1
 }
 
@@ -182,10 +168,10 @@ if ! dump_kafka; then
 fi
 
 MSG_COUNT=$(wc -l < "$DUMP_FILE")
-log INFO "Dump completed: $MSG_COUNT messages"
+log INFO "Messages dumped: $MSG_COUNT"
 
 # ============================================================================
-# Metadata + Encrypt + Upload
+# Metadata + Encryption
 # ============================================================================
 
 META_FILE="${WORKDIR}/metadata.json"
@@ -196,7 +182,7 @@ cat > "$META_FILE" <<EOF
   "topic": "${TOPIC}",
   "bootstrap": "${KAFKA_BOOTSTRAP}",
   "message_count": ${MSG_COUNT},
-  "ucd_run_id": "${UCD_RUN_ID}",
+  "run_id": "${UCD_RUN_ID}",
   "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
 }
 EOF
@@ -212,7 +198,7 @@ printf "%s" "$OTP" | gpg --batch --yes --passphrase-fd 0 \
     --symmetric --cipher-algo AES256 "$GZ_FILE"
 
 # ============================================================================
-# Artifactory Upload (strict HTTP 200/201)
+# Artifactory Upload (strict 200/201 only)
 # ============================================================================
 
 UPLOAD_URL="${ARTIFACTORY_BASE_URL%/}/kafka-dump/INC/${INC}/${REQ}/${TOPIC}/$(basename "$ENC_FILE")"
@@ -228,6 +214,7 @@ upload() {
             return 0
         fi
 
+        log ERROR "Upload failed with HTTP $HTTP_CODE (attempt $attempt)"
         sleep $((attempt * 2))
         (( attempt++ ))
     done
@@ -235,14 +222,22 @@ upload() {
 }
 
 if ! upload; then
-    fail "Upload to Artifactory failed"
+    fail "Artifactory upload failed"
 fi
 
+log INFO "Upload successful: $UPLOAD_URL"
+
 # ============================================================================
-# Final JSON Output for UCD
+# Cleanup
 # ============================================================================
+
+rm -rf "$WORKDIR"
+
+# ============================================================================
+# Final JSON Output (UCD-Compatible)
+# ============================================================================
+
 printf '{"status":"OK","artifactory_url":"%s","messages":%s}\n' \
     "$UPLOAD_URL" "$MSG_COUNT"
 
 exit 0
-
