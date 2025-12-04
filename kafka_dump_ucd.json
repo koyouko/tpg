@@ -1,0 +1,98 @@
+{
+  "version": 12,
+  "components": [
+    {
+      "name": "Kafka-Dump-Utility",
+      "description": "Runs kafka_dump.sh to securely dump Kafka messages and upload to Artifactory.",
+      "template": true,
+      "properties": [
+        {
+          "name": "INC_NUMBER",
+          "label": "INC Number",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "REQ_NUMBER",
+          "label": "REQ Number",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "BOOTSTRAP_SERVERS",
+          "label": "Kafka Bootstrap Servers",
+          "description": "Comma-separated Kafka brokers",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "KAFKA_TOPIC",
+          "label": "Kafka Topic",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "OTP_PASSWORD",
+          "label": "One-Time Password",
+          "type": "SECURE",
+          "required": true
+        },
+        {
+          "name": "ARTIFACTORY_USER",
+          "label": "Artifactory Username",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "ARTIFACTORY_PASSWORD",
+          "label": "Artifactory Password",
+          "type": "SECURE",
+          "required": true
+        },
+        {
+          "name": "CLUSTER_NAME",
+          "label": "Optional Cluster Name",
+          "type": "TEXT",
+          "required": false
+        },
+        {
+          "name": "ENVIRONMENT_NAME",
+          "label": "Optional Environment Name",
+          "type": "TEXT",
+          "required": false
+        },
+        {
+          "name": "REQUESTOR",
+          "label": "Requestor Username",
+          "type": "TEXT",
+          "required": true
+        },
+        {
+          "name": "ARTIFACTORY_BASE_URL",
+          "label": "Artifactory Base URL",
+          "type": "TEXT",
+          "required": true
+        }
+      ],
+
+      "componentProcesses": [
+        {
+          "name": "run_kafka_dump",
+          "description": "Executes kafka_dump.sh using user-supplied arguments.",
+          "inventoryActionType": "NONE",
+          "defaultWorkingDir": "${p:resource/work.dir}",
+          "steps": [
+            {
+              "type": "com.urbancode.plugin.script:script",
+              "name": "Run Kafka Dump",
+              "commandPath": "",
+              "shell": "bash",
+              "scriptBody": "#!/bin/bash\n\nexport ARTIFACTORY_BASE_URL=\"${p:ARTIFACTORY_BASE_URL}\"\nexport ARTIFACTORY_USER=\"${p:ARTIFACTORY_USER}\"\nexport ARTIFACTORY_PASSWORD=\"${p:ARTIFACTORY_PASSWORD}\"\n\nchmod +x ${p:component.workspace}/scripts/kafka_dump.sh\n\n${p:component.workspace}/scripts/kafka_dump.sh \\\n  --inc \"${p:INC_NUMBER}\" \\\n  --req \"${p:REQ_NUMBER}\" \\\n  --bootstrap \"${p:BOOTSTRAP_SERVERS}\" \\\n  --cluster \"${p:CLUSTER_NAME}\" \\\n  --env \"${p:ENVIRONMENT_NAME}\" \\\n  --topic \"${p:KAFKA_TOPIC}\" \\\n  --otp \"${p:OTP_PASSWORD}\" \\\n  --requestor \"${p:REQUESTOR}\"",
+              "workingDir": "${p:resource/work.dir}"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
