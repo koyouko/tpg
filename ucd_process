@@ -1,0 +1,22 @@
+#!/bin/bash
+
+export INC="${p:INC_NUMBER}"
+export REQ="${p:REQ_NUMBER}"
+export KAFKA_BOOTSTRAP="${p:BOOTSTRAP_SERVERS}"
+export TOPIC="${p:KAFKA_TOPIC}"
+export OTP="${p:OTP_PASSWORD}"
+export REQUESTOR="${p:REQUESTOR}"
+
+export CLUSTER="${p:CLUSTER_NAME}"
+export ENV_NAME="${p:ENVIRONMENT_NAME}"
+
+export ARTIFACTORY_BASE_URL="${p:ARTIFACTORY_BASE_URL}"
+export ARTIFACTORY_USER="${p:ARTIFACTORY_USER}"
+export ARTIFACTORY_PASSWORD="${p:ARTIFACTORY_PASSWORD}"
+
+# UCD run ID for tracking
+export UCD_RUN_ID="${p:componentProcess.run.id}"
+
+chmod +x ${p:component.workspace}/scripts/kafka_dump.sh
+
+${p:component.workspace}/scripts/kafka_dump.sh
