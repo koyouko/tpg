@@ -1,0 +1,8 @@
+sudo bash -c '
+for p in /proc/[0-9]*; do
+  pid=${p##*/}
+  c=$(wc -l < "$p/maps" 2>/dev/null) || continue
+  cmd=$(tr "\0" " " < "$p/cmdline" 2>/dev/null)
+  printf "%8s %8s %s\n" "$c" "$pid" "${cmd:-[kernel]}"
+done | sort -nr | head -20
+'
