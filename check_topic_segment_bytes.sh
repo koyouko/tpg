@@ -7,17 +7,19 @@ BROKER_ID="0"
 DEFAULT_BYTES=""
 KAFKA_BIN_DIR="${KAFKA_BIN_DIR:-}"
 SORT_MODE="topic"
+ONLY_OVERRIDES="no"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --bootstrap-server) BOOTSTRAP="${2:-}"; shift 2;;
-    --command-config)   COMMAND_CONFIG="${2:-}"; shift 2;;
-    --broker-id)        BROKER_ID="${2:-}"; shift 2;;
-    --default-bytes)    DEFAULT_BYTES="${2:-}"; shift 2;;
-    --kafka-bin-dir)    KAFKA_BIN_DIR="${2:-}"; shift 2;;
-    --sort)             SORT_MODE="${2:-topic}"; shift 2;;
+    --bootstrap-server)  BOOTSTRAP="${2:-}"; shift 2;;
+    --command-config)    COMMAND_CONFIG="${2:-}"; shift 2;;
+    --broker-id)         BROKER_ID="${2:-}"; shift 2;;
+    --default-bytes)     DEFAULT_BYTES="${2:-}"; shift 2;;
+    --kafka-bin-dir)     KAFKA_BIN_DIR="${2:-}"; shift 2;;
+    --sort)              SORT_MODE="${2:-topic}"; shift 2;;
+    --only-overrides)    ONLY_OVERRIDES="yes"; shift 1;;
     -h|--help)
-      echo "Usage: $0 --command-config /path/client.properties [--bootstrap-server host:port] [--broker-id N] [--default-bytes BYTES] [--kafka-bin-dir DIR] [--sort topic|segdesc|deltadesc|source]"
+      echo "Usage: $0 --command-config /path/client.properties [--bootstrap-server host:port] [--broker-id N] [--default-bytes BYTES] [--kafka-bin-dir DIR] [--sort topic|segdesc|deltadesc|source] [--only-overrides]"
       exit 0
       ;;
     *) echo "Unknown arg: $1"; exit 1;;
@@ -94,14 +96,18 @@ fi
 ' > "$tmp_overrides"
 
 # 3) Join: all topics -> override or default
-awk -v def="$DEFAULT_BYTES" '
+awk -v def="$DEFAULT_BYTES" -v only_ov="$ONLY_OVERRIDES" '
   BEGIN { FS=OFS="\t" }
   FNR==NR { ov[$1]=$2; next }
   {
     topic=$0
+    has_ov = (topic in ov)
+    if (only_ov=="yes" && !has_ov) next
+
     seg=def+0
     src="DEFAULT"
-    if (topic in ov) { seg=ov[topic]+0; src="OVERRIDE" }
+    if (has_ov) { seg=ov[topic]+0; src="OVERRIDE" }
+
     delta = seg - (def+0)
     rel = (delta>0 ? "GT" : (delta<0 ? "LT" : "EQ"))
     print topic, seg, src, (def+0), delta, rel
@@ -124,8 +130,6 @@ case "${SORT_MODE,,}" in
     sort -t $'\t' -k5,5nr -k1,1 "$tmp_out"
     ;;
   source)
-    # OVERRIDE first, then DEFAULT; within each group sort by topic
-    # (O sorts before D in ASCII, but we’ll be explicit)
     awk -F $'\t' 'BEGIN{OFS=FS}{rank=($3=="OVERRIDE"?0:1); print rank,$0}' "$tmp_out" \
       | sort -t $'\t' -k1,1n -k2,2 \
       | cut -f2-
