@@ -8,6 +8,7 @@ DEFAULT_BYTES=""
 KAFKA_BIN_DIR="${KAFKA_BIN_DIR:-}"
 SORT_MODE="topic"
 ONLY_OVERRIDES="no"
+ONLY_DIFF="no"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -18,8 +19,9 @@ while [[ $# -gt 0 ]]; do
     --kafka-bin-dir)     KAFKA_BIN_DIR="${2:-}"; shift 2;;
     --sort)              SORT_MODE="${2:-topic}"; shift 2;;
     --only-overrides)    ONLY_OVERRIDES="yes"; shift 1;;
+    --only-diff)         ONLY_DIFF="yes"; shift 1;;
     -h|--help)
-      echo "Usage: $0 --command-config /path/client.properties [--bootstrap-server host:port] [--broker-id N] [--default-bytes BYTES] [--kafka-bin-dir DIR] [--sort topic|segdesc|deltadesc|source] [--only-overrides]"
+      echo "Usage: $0 --command-config /path/client.properties [--bootstrap-server host:port] [--broker-id N] [--default-bytes BYTES] [--kafka-bin-dir DIR] [--sort topic|segdesc|deltadesc|source] [--only-overrides] [--only-diff]"
       exit 0
       ;;
     *) echo "Unknown arg: $1"; exit 1;;
@@ -95,10 +97,10 @@ fi
   }
 ' > "$tmp_overrides"
 
-# 3) Join: all topics -> override or default
-awk -v def="$DEFAULT_BYTES" -v only_ov="$ONLY_OVERRIDES" '
+# 3) Join: all topics -> override or default; apply filters
+awk -v def="$DEFAULT_BYTES" -v only_ov="$ONLY_OVERRIDES" -v only_diff="$ONLY_DIFF" '
   BEGIN { FS=OFS="\t" }
-  FNR==NR { ov[$1]=$2; next }
+  FNR==NR { ov[$1]=$2; next }   # overrides file
   {
     topic=$0
     has_ov = (topic in ov)
@@ -109,6 +111,8 @@ awk -v def="$DEFAULT_BYTES" -v only_ov="$ONLY_OVERRIDES" '
     if (has_ov) { seg=ov[topic]+0; src="OVERRIDE" }
 
     delta = seg - (def+0)
+    if (only_diff=="yes" && delta==0) next
+
     rel = (delta>0 ? "GT" : (delta<0 ? "LT" : "EQ"))
     print topic, seg, src, (def+0), delta, rel
   }
