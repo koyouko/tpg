@@ -5,6 +5,8 @@ BOOTSTRAP=""
 COMMAND_CONFIG=""
 BROKER_ID="0"
 DEFAULT_BYTES=""
+KAFKA_BIN_DIR="${KAFKA_BIN_DIR:-}"
+SORT_MODE="topic"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -12,8 +14,10 @@ while [[ $# -gt 0 ]]; do
     --command-config)   COMMAND_CONFIG="${2:-}"; shift 2;;
     --broker-id)        BROKER_ID="${2:-}"; shift 2;;
     --default-bytes)    DEFAULT_BYTES="${2:-}"; shift 2;;
+    --kafka-bin-dir)    KAFKA_BIN_DIR="${2:-}"; shift 2;;
+    --sort)             SORT_MODE="${2:-topic}"; shift 2;;
     -h|--help)
-      echo "Usage: $0 --command-config /path/client.properties [--bootstrap-server host:port] [--broker-id N] [--default-bytes BYTES]"
+      echo "Usage: $0 --command-config /path/client.properties [--bootstrap-server host:port] [--broker-id N] [--default-bytes BYTES] [--kafka-bin-dir DIR] [--sort topic|segdesc|deltadesc|source]"
       exit 0
       ;;
     *) echo "Unknown arg: $1"; exit 1;;
@@ -28,19 +32,41 @@ fi
 if [[ -z "$BOOTSTRAP" ]]; then
   fqdn="$(hostname -f 2>/dev/null || true)"
   [[ -z "$fqdn" ]] && fqdn="$(hostname 2>/dev/null || true)"
-  if [[ -z "$fqdn" ]]; then
-    echo "ERROR: could not determine hostname/FQDN; provide --bootstrap-server explicitly."
-    exit 2
-  fi
+  [[ -z "$fqdn" ]] && { echo "ERROR: could not determine hostname/FQDN; provide --bootstrap-server."; exit 2; }
   BOOTSTRAP="${fqdn}:9094"
 fi
 
-# Resolve kafka-configs binary (Confluent Platform supports kafka-configs or kafka-configs.sh)
-CONFIGS_CMD="$(command -v kafka-configs 2>/dev/null || true)"
-[[ -z "$CONFIGS_CMD" ]] && CONFIGS_CMD="$(command -v kafka-configs.sh 2>/dev/null || true)"
-[[ -z "$CONFIGS_CMD" ]] && { echo "ERROR: kafka-configs(.sh) not found in PATH."; exit 2; }
+# Default Confluent Platform bin dir if not provided and exists
+if [[ -z "${KAFKA_BIN_DIR:-}" ]] && [[ -d /opt/confluent/latest/bin ]]; then
+  KAFKA_BIN_DIR="/opt/confluent/latest/bin"
+fi
 
-# Get broker default log.segment.bytes (or use provided --default-bytes)
+pick_cmd() {
+  local base="$1"
+  if [[ -n "${KAFKA_BIN_DIR:-}" ]] && [[ -x "$KAFKA_BIN_DIR/$base" ]]; then
+    echo "$KAFKA_BIN_DIR/$base"; return 0
+  fi
+  if [[ -n "${KAFKA_BIN_DIR:-}" ]] && [[ -x "$KAFKA_BIN_DIR/$base.sh" ]]; then
+    echo "$KAFKA_BIN_DIR/$base.sh"; return 0
+  fi
+  if command -v "$base" >/dev/null 2>&1; then
+    command -v "$base"; return 0
+  fi
+  if command -v "$base.sh" >/dev/null 2>&1; then
+    command -v "$base.sh"; return 0
+  fi
+  return 1
+}
+
+CONFIGS_CMD="$(pick_cmd kafka-configs)" || { echo "ERROR: kafka-configs(.sh) not found. Expected in ${KAFKA_BIN_DIR:-PATH}."; exit 2; }
+TOPICS_CMD="$(pick_cmd kafka-topics)"  || { echo "ERROR: kafka-topics(.sh) not found. Expected in ${KAFKA_BIN_DIR:-PATH}."; exit 2; }
+
+tmp_overrides="$(mktemp)"
+tmp_topics="$(mktemp)"
+tmp_out="$(mktemp)"
+trap 'rm -f "$tmp_overrides" "$tmp_topics" "$tmp_out"' EXIT
+
+# Broker default log.segment.bytes (or use provided --default-bytes)
 if [[ -z "$DEFAULT_BYTES" ]]; then
   DEFAULT_BYTES="$(
     "$CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --command-config "$COMMAND_CONFIG" \
@@ -50,36 +76,62 @@ if [[ -z "$DEFAULT_BYTES" ]]; then
   DEFAULT_BYTES="${DEFAULT_BYTES:-1073741824}"  # fallback 1GiB
 fi
 
-echo -e "BOOTSTRAP_SERVER\t${BOOTSTRAP}"
-echo -e "BROKER_DEFAULT_LOG_SEGMENT_BYTES\t${DEFAULT_BYTES}"
-echo -e "TOPIC\tSEGMENT_BYTES\tDEFAULT\tDELTA_BYTES\tRELATION"
+# 1) Dump ALL topics once
+"$TOPICS_CMD" --bootstrap-server "$BOOTSTRAP" --command-config "$COMMAND_CONFIG" --list 2>/dev/null \
+| sed '/^[[:space:]]*$/d' > "$tmp_topics"
 
-# Single call across all topics; print only topics with segment.bytes override
+# 2) Dump ALL topic configs once; extract segment.bytes overrides into TSV
 "$CONFIGS_CMD" --bootstrap-server "$BOOTSTRAP" --command-config "$COMMAND_CONFIG" \
   --entity-type topics --describe --all 2>/dev/null \
-| awk -v def="$DEFAULT_BYTES" '
-  function relation(seg, def,  d) {
-    d = seg - def
-    if (d > 0) return "GT"
-    if (d < 0) return "LT"
-    return "EQ"
+| awk '
+  match($0, /(Dynamic|All)[[:space:]]+configs[[:space:]]+for[[:space:]]+topic[[:space:]]+([^[:space:]]+)[[:space:]]+are:/, t) {
+    topic=t[2]; next
   }
-
-  # Typical header:
-  # Dynamic configs for topic <topic> are:
-  /^Dynamic configs for topic[[:space:]]+/ {
-    topic=$5
-    gsub(/:$/,"",topic)
-    next
-  }
-
-  # Some versions may show:
-  # Dynamic configs for topic <topic> are:
-  #   segment.bytes=123456 ...
   topic != "" && match($0, /segment\.bytes=([0-9]+)/, m) {
-    seg = m[1] + 0
-    delta = seg - (def + 0)
-    printf "%s\t%d\t%d\t%d\t%s\n", topic, seg, def, delta, relation(seg, def)
+    print topic "\t" m[1]
     topic=""
   }
-'
+' > "$tmp_overrides"
+
+# 3) Join: all topics -> override or default
+awk -v def="$DEFAULT_BYTES" '
+  BEGIN { FS=OFS="\t" }
+  FNR==NR { ov[$1]=$2; next }
+  {
+    topic=$0
+    seg=def+0
+    src="DEFAULT"
+    if (topic in ov) { seg=ov[topic]+0; src="OVERRIDE" }
+    delta = seg - (def+0)
+    rel = (delta>0 ? "GT" : (delta<0 ? "LT" : "EQ"))
+    print topic, seg, src, (def+0), delta, rel
+  }
+' "$tmp_overrides" "$tmp_topics" > "$tmp_out"
+
+echo -e "BOOTSTRAP_SERVER\t${BOOTSTRAP}"
+echo -e "KAFKA_BIN_DIR\t${KAFKA_BIN_DIR:-PATH}"
+echo -e "BROKER_DEFAULT_LOG_SEGMENT_BYTES\t${DEFAULT_BYTES}"
+echo -e "TOPIC\tSEGMENT_BYTES\tSOURCE\tDEFAULT\tDELTA_BYTES\tRELATION"
+
+case "${SORT_MODE,,}" in
+  topic)
+    sort -t $'\t' -k1,1 "$tmp_out"
+    ;;
+  segdesc)
+    sort -t $'\t' -k2,2nr -k1,1 "$tmp_out"
+    ;;
+  deltadesc)
+    sort -t $'\t' -k5,5nr -k1,1 "$tmp_out"
+    ;;
+  source)
+    # OVERRIDE first, then DEFAULT; within each group sort by topic
+    # (O sorts before D in ASCII, but we’ll be explicit)
+    awk -F $'\t' 'BEGIN{OFS=FS}{rank=($3=="OVERRIDE"?0:1); print rank,$0}' "$tmp_out" \
+      | sort -t $'\t' -k1,1n -k2,2 \
+      | cut -f2-
+    ;;
+  *)
+    echo "WARN: unknown --sort ${SORT_MODE}; using topic" >&2
+    sort -t $'\t' -k1,1 "$tmp_out"
+    ;;
+esac
