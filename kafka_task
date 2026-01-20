@@ -1,0 +1,211 @@
+1. Consumer Group Deletion
+
+In scope
+	•	Delete consumer groups via:
+	•	kafka-consumer-groups --delete
+	•	Supported targeting:
+	•	Explicit group ID list only (PROD)
+	•	Validation before delete:
+	•	Group exists
+	•	Group state = Empty
+	•	No active members
+	•	Snapshot of:
+	•	committed offsets
+	•	lag (best-effort)
+
+Out of scope
+	•	Stopping applications or scaling consumers
+	•	Identifying stale groups automatically
+	•	Deleting topics used by the group
+
+Required inputs
+	•	cluster
+	•	group_id
+	•	ticket_id / change_ref
+	•	dry-run | apply
+
+Authorization required
+	•	Group:<group> → DELETE
+	•	Cluster → DESCRIBE
+
+Rollback
+	•	No rollback
+	•	Group metadata and offsets are permanently removed
+	•	Recovery requires application reprocessing or manual offset reset
+
+⸻
+
+2. Topic Deletion
+
+In scope
+	•	Delete topics using:
+	•	kafka-topics --delete
+	•	Pre-checks:
+	•	Topic exists
+	•	Not in protected list
+	•	Capture topic metadata:
+	•	partitions
+	•	replication factor
+	•	configs
+	•	Verify delete.topic.enable=true
+
+Out of scope
+	•	Determining topic usage
+	•	Coordinating producer/consumer shutdown
+	•	Truncation without deletion
+
+Required inputs
+	•	topic_name
+	•	cluster
+	•	ticket_id / approver
+	•	dry-run | apply
+
+Authorization required
+	•	Topic:<topic> → DELETE
+	•	Cluster → DESCRIBE
+
+Rollback
+	•	No rollback
+	•	Topic can be recreated, but data is permanently lost
+	•	Config export prior to deletion is recommended
+
+⸻
+
+3. ACL Grant & Removal (ZooKeeper ACLs)
+
+In scope
+	•	Manage Kafka ACLs via:
+	•	kafka-acls
+	•	Supported resources:
+	•	Topic
+	•	Group
+	•	Cluster
+	•	TransactionalId
+	•	Supported operations:
+	•	READ, WRITE, CREATE, DELETE
+	•	DESCRIBE, DESCRIBE_CONFIGS
+	•	ALTER, ALTER_CONFIGS
+	•	IDEMPOTENT_WRITE
+	•	Pattern types:
+	•	LITERAL (default)
+	•	PREFIXED (optional, restricted)
+
+Validation
+	•	Principal format validation (User:<CN>)
+	•	Resource existence check (where applicable)
+	•	Dry-run shows:
+	•	ACL diff (before vs after)
+
+Out of scope
+	•	Principal creation or certificate lifecycle
+	•	RBAC roles or MDS role bindings
+	•	Auto-discovery of required permissions
+
+Required inputs
+	•	principal
+	•	resource_type
+	•	resource_name
+	•	pattern_type
+	•	operation
+	•	ALLOW | DENY
+	•	grant | revoke
+
+Authorization required
+	•	Cluster → ALTER
+	•	Resource-specific ALTER
+
+Rollback
+	•	Rollback = apply inverse ACL change
+	•	ACL snapshot captured before modification
+
+⸻
+
+4. Consumer Group Offset Management
+
+4.1 Offset Reset
+
+In scope
+	•	Reset offsets using:
+	•	kafka-consumer-groups --reset-offsets --execute
+	•	Supported strategies:
+	•	earliest / latest
+	•	timestamp
+	•	duration
+	•	absolute offset
+	•	Validation:
+	•	Group exists
+	•	Group state = Empty
+	•	Offset diff preview in dry-run
+
+Out of scope
+	•	Stopping applications
+	•	Application-level replay validation
+
+Required inputs
+	•	group_id
+	•	topic(s)
+	•	reset_strategy
+	•	dry-run | apply
+
+Authorization required
+	•	Group:<group> → ALTER
+	•	Topic:<topic> → READ
+
+Rollback
+	•	Rollback only possible if prior offsets were captured
+	•	Automation must export offsets before execution
+
+⸻
+
+4.2 Offset Export / Import
+
+In scope
+	•	Export committed offsets to file (JSON/CSV)
+	•	Reapply offsets from file
+
+Out of scope
+	•	Cross-cluster offset mapping logic
+
+⸻
+
+5. Total Message Count on a Topic
+
+Method A – Offset-based estimate (default)
+
+In scope
+	•	Calculate:
+	•	endOffset - earliestOffset per partition
+	•	Aggregate total
+	•	Output per-partition breakdown
+
+Out of scope
+	•	Exact record count for compacted topics
+	•	Deduplicated counts
+
+Caveats (must be documented)
+	•	Compacted topics ≠ record count
+	•	Retention affects earliest offset
+	•	Aborted transactions may skew expectations
+
+⸻
+
+Method B – Full scan (restricted)
+
+In scope
+	•	Bounded consumer-based scan
+	•	Throttled, time-boxed
+
+Restrictions
+	•	DEV/UAT only by default
+	•	PROD requires explicit approval
+
+⸻
+
+Mandatory audit output (all tasks)
+	•	Cluster name
+	•	Auth principal (CN)
+	•	Action type
+	•	Target resources
+	•	Before / after snapshot (where applicable)
+	•	Timestamp
+	•	Result (success / failure)
