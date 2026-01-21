@@ -1,69 +1,154 @@
-Kafka Node Audit Script
-This script audits a Red Hat Enterprise Linux 8 (RHEL8) system for readiness as a Confluent Platform (Kafka) broker, compares current kernel/sysctl tuning with Confluent's cp-ansible best practices, and can optionally update kernel tunables at runtime.
+Sub-task 1: Automate Consumer Group Deletion
 
-Features
-Checks essential RHEL/system tuning for optimal Kafka performance
+Description
+Automate deletion of Kafka consumer groups with strict validation and safety controls.
 
-Compares live system values to cp-ansible kernel sysctl recommendations
+Scope
 
-Validates network, Java, ulimits, and key Kafka parameters
+Delete explicitly specified consumer groups only
 
-Prints a color-coded summary of system state vs. recommended values
+Validate group existence and ensure group state is Empty
 
-Applies recommended sysctl kernel parameters at runtime if invoked with -apply (root required)
+Capture offset snapshot before deletion
 
-No changes are made unless -apply is specified
+Block protected/system consumer groups
 
-Usage
-bash
-./kafka_node_audit.sh
-By default, runs in diagnostic mode: only reports differences, no system changes.
+Acceptance Criteria
 
-To apply cp-ansible kernel/sysctl recommendations at runtime:
+Dry-run shows groups targeted for deletion
 
-bash
-sudo ./kafka_node_audit.sh -apply
-Use sudo or run as the root user to allow sysctl changes.
+Deletion fails if group has active members
 
-Note: Changes made with -apply affect the current running system/session. To persist across reboots, add tunables to /etc/sysctl.conf or /etc/sysctl.d/*.conf.
+Audit log includes group name, offsets snapshot, and execution result
 
-Requirements
-RHEL 8 or compatible system
+No wildcard deletions allowed in PROD
 
-Bash (version 4+ recommended)
+Sub-task 2: Automate Topic Deletion
 
-Utilities: sysctl, awk, ethtool (for NIC checks), sudo
+Description
+Automate Kafka topic deletion with pre-checks and metadata capture.
 
-Passwordless sudo for the Kafka service user (default: stekafka) is recommended for full ulimit inspection
+Scope
 
-What is Checked
-Host OS, kernel, and virtualization detection
+Delete explicitly listed topics only
 
-tuned profile and Transparent Huge Pages (THP)
+Block deletion of internal/protected topics
 
-Kernel sysctl tuning (both common Kafka and cp-ansible-standard)
+Capture topic metadata (partitions, RF, configs) before deletion
 
-Example keys: vm.swappiness, net.core.rmem_max, net.core.wmem_max, fs.file-max, net.core.somaxconn, net.ipv4.tcp_rmem, net.ipv4.tcp_wmem, and more
+Validate delete.topic.enable=true
 
-Network links, interfaces, and ring buffer sizes
+Acceptance Criteria
 
-NIC speed detection (including warning if < 25Gbps)
+Dry-run displays topics and metadata to be deleted
 
-Bonding/link aggregation
+Protected topics cannot be deleted
 
-Java and Confluent Platform versions
+Topic config snapshot is stored before deletion
 
-User limits (nofile, nproc, memlock) for service user
+Audit log captures topic name and execution outcome
 
-Key Kafka server.properties recommendations (threads, dirs, etc.)
+Sub-task 3: Automate Kafka ACL Grant and Removal
 
-Kafka broker running status
+Description
+Provide controlled automation for managing Kafka ACLs using ZooKeeper-backed authorization.
 
-Example Output
-PASS (green): Current value meets or exceeds Kafka/cp-ansible recommendations
+Scope
 
-WARN (yellow): Value below recommendation, or not configured as suggested
+Grant and revoke ACLs for Topic, Group, Cluster, and TransactionalId
 
-INFO (no color): Informational output
+Support LITERAL and restricted PREFIXED patterns
 
-FAIL (red): Critical parameter missing or found to be unsatisfactory
+Display ACL diff in dry-run mode
+
+Validate principal and resource inputs
+
+Acceptance Criteria
+
+Dry-run shows exact ACL changes (before vs after)
+
+No wildcard ACLs allowed in PROD
+
+ACL rollback supported via inverse operation
+
+ACL changes are fully auditable
+
+Sub-task 4: Automate Consumer Group Offset Management
+
+Description
+Automate consumer group offset reset, export, and import operations.
+
+Scope
+
+Offset reset strategies:
+
+earliest, latest
+
+timestamp, duration
+
+absolute offset
+
+Enforce inactive (Empty) consumer group requirement
+
+Export offsets prior to modification
+
+Acceptance Criteria
+
+Dry-run displays offset delta before execution
+
+Offset reset fails if group is active
+
+Offset snapshot is captured before apply
+
+Rollback supported if snapshot exists
+
+Sub-task 5: Automate Topic Message Count Calculation
+
+Description
+Provide topic message count capability using safe, offset-based estimation.
+
+Scope
+
+Calculate message count using:
+
+endOffset - earliestOffset per partition
+
+Provide partition-level and aggregated output
+
+Clearly label counts as estimates
+
+Acceptance Criteria
+
+Output includes per-partition offsets and total count
+
+Compacted topic caveats are documented
+
+No full topic scan in PROD by default
+
+Results are timestamped and auditable
+
+Security & Compliance Requirements
+
+mTLS authentication using platform-approved certificates
+
+Kafka ACL validation before execution
+
+Protected resources enforced via deny-list
+
+Immutable audit logs per execution
+
+PROD execution requires ticket reference and approval metadata
+
+Dependencies
+
+Kafka Admin client access with mTLS
+
+Required Kafka ACLs for admin service principal
+
+Approved protected resource allow/deny lists
+
+Definition of Done
+
+All sub-tasks implemented and tested in DEV and UAT
+
+PROD execution gated and validated
