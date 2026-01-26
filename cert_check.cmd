@@ -1,146 +1,132 @@
 <#
 .SYNOPSIS
-    Checks a remote HTTPS server's certificate: shows signature algorithm, validity dates, 
-    days until expiry, and full certificate details.
+    Checks a remote HTTPS/TLS server's certificate (works even if handshake fails due to bad cert/name mismatch).
+    Shows signature algorithm, issuer, subject, validity, days until expiry, and full details.
 
-.PARAMETER HostName
-    The domain name to check (e.g. www.google.com)
+.PARAMETER TargetHost
+    The hostname/IP to connect to (required)
 
 .PARAMETER Port
-    Optional: TCP port (default: 443)
+    TCP port (default: 443)
 
 .EXAMPLE
-    .\Check-ServerCertificate.ps1 -HostName www.google.com
-
-.EXAMPLE
-    .\Check-ServerCertificate.ps1 -HostName portal.office.com -Port 443
+    .\Check-ServerCertificate.ps1 -TargetHost sd-p76h-wfnb.nam.nsroot.net -Port 9095
 #>
 
 [CmdletBinding()]
 param (
     [Parameter(Mandatory = $true)]
-    [string]$HostName,
+    [string]$TargetHost,
 
     [Parameter(Mandatory = $false)]
     [int]$Port = 443
 )
 
-# -----------------------------------------------------------------------------
-# Functions
-# -----------------------------------------------------------------------------
+Write-Host "`n=== Certificate Check for ${TargetHost}:${Port} ===" -ForegroundColor Cyan
 
-function Get-CertificateText {
-    param([string]$host, [int]$port)
-    $errorOutput = $null
-    $result = "" | & openssl s_client -connect "$host`:$port" -servername $host 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        Write-Error "openssl s_client failed (exit code $LASTEXITCODE). Is openssl installed and in PATH?"
-        return $null
-    }
-    # Extract only the certificate part
-    $certStarted = $false
-    $certLines = @()
-    foreach ($line in $result) {
-        if ($line -match "BEGIN CERTIFICATE") { $certStarted = $true }
-        if ($certStarted) { $certLines += $line }
-        if ($line -match "END CERTIFICATE") { break }
-    }
-    if ($certLines.Count -eq 0) { return $null }
-    return $certLines -join "`n"
-}
+# -----------------------------------------------------------------------------
+# Get raw s_client output with -showcerts (works even on failure)
+# -----------------------------------------------------------------------------
+Write-Verbose "Running openssl s_client -showcerts ..."
+$sclientOutput = "" | & openssl s_client -connect "$TargetHost`:$Port" -servername $TargetHost -showcerts 2>&1
 
-function Parse-EndDate {
-    param([string]$certText)
-    $endLine = $certText | Select-String "notAfter=(.+)"
-    if ($endLine) {
-        $dateStr = $endLine.Matches.Groups[1].Value.Trim()
-        try {
-            # openssl date format: MMM  d HH:mm:ss yyyy GMT   or   MMM dd HH:mm:ss yyyy GMT
-            $culture = [System.Globalization.CultureInfo]::InvariantCulture
-            $expiry = [datetime]::ParseExact($dateStr, @("MMM  d HH:mm:ss yyyy GMT", "MMM dd HH:mm:ss yyyy GMT"), $culture, [System.Globalization.DateTimeStyles]::None)
-            return $expiry
-        }
-        catch {
-            Write-Warning "Could not parse expiry date: $dateStr"
-            return $null
-        }
-    }
-    return $null
+if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Handshake failed (likely name mismatch, untrusted CA, or protocol issue). Exit code: $LASTEXITCODE"
+    Write-Host "Raw connection output snippet:" -ForegroundColor DarkYellow
+    $sclientOutput | Select-Object -First 40 | Out-Host
 }
 
 # -----------------------------------------------------------------------------
-# Main Logic
+# Extract all PEM cert blocks (there may be chain certs)
 # -----------------------------------------------------------------------------
+$certBlocks = @()
+$currentBlock = @()
+$inCert = $false
 
-Write-Host "`nChecking certificate for: " -NoNewline -ForegroundColor Cyan
-Write-Host "$HostName`:$Port" -ForegroundColor White
+foreach ($line in $sclientOutput) {
+    if ($line -match "-+BEGIN CERTIFICATE-+") {
+        $inCert = $true
+        $currentBlock = @($line)
+    }
+    elseif ($inCert) {
+        $currentBlock += $line
+        if ($line -match "-+END CERTIFICATE-+") {
+            $inCert = $false
+            $certBlocks += ($currentBlock -join "`n")
+            $currentBlock = @()
+        }
+    }
+}
 
-$certText = Get-CertificateText -host $HostName -port $Port
-
-if (-not $certText) {
-    Write-Error "Could not retrieve certificate from $HostName`:$Port"
+if ($certBlocks.Count -eq 0) {
+    Write-Error "No certificate found in output. Check hostname, port, firewall, or OpenSSL installation."
+    Write-Host "Full raw output for debugging:" -ForegroundColor Red
+    $sclientOutput | Out-Host
     exit 1
 }
 
-# Get full parsed output
-$fullText = $certText | & openssl x509 -noout -text
+# Take the first cert (usually the server/leaf cert)
+$serverCertPEM = $certBlocks[0]
 
-if (-not $fullText) {
-    Write-Error "openssl x509 parsing failed"
+# -----------------------------------------------------------------------------
+# Parse the server cert with openssl x509
+# -----------------------------------------------------------------------------
+Write-Verbose "Parsing server certificate ..."
+$certText = $serverCertPEM | & openssl x509 -noout -text 2>$null
+
+if (-not $certText) {
+    Write-Error "Failed to parse certificate with x509. Raw PEM block:"
+    $serverCertPEM | Out-Host
     exit 1
 }
 
 # Extract key fields
-$sigAlgo   = ($fullText | Select-String "Signature Algorithm:").Line -replace ".*:\s*",""
-$subject   = ($fullText | Select-String "Subject:\s").Line -replace ".*:\s*",""
-$issuer    = ($fullText | Select-String "Issuer:\s").Line -replace ".*:\s*",""
-$notBefore = ($fullText | Select-String "Not Before:").Line -replace ".*:\s*",""
-$notAfter  = ($fullText | Select-String "Not After :").Line -replace ".*:\s*",""
+$subject   = ($certText | Select-String "^\s*Subject:" -Context 0,5).Line -replace "^\s*Subject:\s*","" | ForEach-Object { $_.Trim() }
+$issuer    = ($certText | Select-String "^\s*Issuer:").Line   -replace "^\s*Issuer:\s*",""   | ForEach-Object { $_.Trim() }
+$sigAlgo   = ($certText | Select-String "Signature Algorithm:").Line -replace ".*:\s*","" | ForEach-Object { $_.Trim() }
+$notBefore = ($certText | Select-String "Not Before:").Line  -replace ".*:\s*","" | ForEach-Object { $_.Trim() }
+$notAfter  = ($certText | Select-String "Not After :").Line  -replace ".*:\s*","" | ForEach-Object { $_.Trim() }
 
-$expiryDate = Parse-EndDate -certText $fullText
-
-# Calculate days left
-$daysLeft = $null
-if ($expiryDate) {
-    $now = Get-Date
-    $daysLeft = [math]::Floor(($expiryDate - $now).TotalDays)
+# Parse expiry for days left
+$expiryDate = $null
+try {
+    $dateStr = $notAfter -replace '^notAfter=\s*',''
+    $expiryDate = [datetime]::ParseExact($dateStr, @("MMM  d HH:mm:ss yyyy GMT", "MMM dd HH:mm:ss yyyy GMT"), [System.Globalization.CultureInfo]::InvariantCulture)
+    $daysLeft = [math]::Floor( ($expiryDate - (Get-Date)).TotalDays )
+} catch {
+    Write-Warning "Could not parse Not After date: $notAfter"
+    $daysLeft = $null
 }
 
 # -----------------------------------------------------------------------------
-# Output - nice formatting
+# Nice output
 # -----------------------------------------------------------------------------
-
-Write-Host "`nSubject : " -NoNewline -ForegroundColor Gray
-Write-Host $subject -ForegroundColor White
-
-Write-Host "Issuer  : " -NoNewline -ForegroundColor Gray
-Write-Host $issuer -ForegroundColor White
-
-Write-Host "`nSignature Algorithm : " -NoNewline -ForegroundColor Gray
-Write-Host $sigAlgo -ForegroundColor Green
+Write-Host "`nServer Certificate Details:" -ForegroundColor Green
+Write-Host "Subject          : " -NoNewline; Write-Host $subject -ForegroundColor White
+Write-Host "Issuer           : " -NoNewline; Write-Host $issuer  -ForegroundColor White
+Write-Host "Signature Alg.   : " -NoNewline; Write-Host $sigAlgo -ForegroundColor Magenta
 
 Write-Host "`nValidity:"
 Write-Host "  Not Before : $notBefore"
 Write-Host "  Not After  : " -NoNewline
 
 if ($daysLeft -lt 0) {
-    Write-Host $notAfter -ForegroundColor Red -NoNewline
-    Write-Host "  (EXPIRED $([math]::Abs($daysLeft)) days ago)" -ForegroundColor Red
-}
-elseif ($daysLeft -le 30) {
-    Write-Host $notAfter -ForegroundColor Yellow -NoNewline
-    Write-Host "  ($daysLeft days remaining)" -ForegroundColor Yellow
-}
-else {
-    Write-Host $notAfter -ForegroundColor White -NoNewline
-    if ($daysLeft -ne $null) {
-        Write-Host "  ($daysLeft days remaining)" -ForegroundColor DarkGray
-    }
+    Write-Host "$notAfter  (EXPIRED $([math]::Abs($daysLeft)) days ago)" -ForegroundColor Red
+} elseif ($daysLeft -le 30) {
+    Write-Host "$notAfter  ($daysLeft days left - WARNING)" -ForegroundColor Yellow
+} else {
+    Write-Host "$notAfter  ($daysLeft days left)" -ForegroundColor White
 }
 
-Write-Host "`nFull certificate details:" -ForegroundColor Cyan
-Write-Host "------------------------------------------------------------"
-$fullText | Out-Host
+# Show full parsed text
+Write-Host "`nFull Parsed Certificate:" -ForegroundColor Cyan
+Write-Host ("-" * 60)
+$certText | Out-Host
+Write-Host ("-" * 60)
 
-Write-Host "------------------------------------------------------------" -ForegroundColor DarkGray
-Write-Host "Done.`n"
+# If there is a chain, mention it
+if ($certBlocks.Count -gt 1) {
+    Write-Host "Chain certificates found: $($certBlocks.Count - 1) intermediate/root certs" -ForegroundColor DarkGray
+}
+
+Write-Host "`nDone. If hostname mismatch suspected, confirm the correct DNS name or check SANs in the full output above." -ForegroundColor DarkCyan
