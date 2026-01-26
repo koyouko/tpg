@@ -1,22 +1,30 @@
 <#
 .SYNOPSIS
-    Checks remote TLS server certificate chain + supports client certificate (mTLS) authentication.
-    Displays server chain details + client auth handshake info.
+    Checks remote TLS server certificate chain and supports mTLS (client certificate authentication).
+    Attempts to determine if the server accepts client certificates and whether the provided client cert was accepted.
 
 .PARAMETER TargetHost
-    Hostname/IP to connect to
+    Hostname or IP address to connect to
 
 .PARAMETER Port
-    Port (default 443)
+    TCP port (default: 443)
 
 .PARAMETER ClientCertPath
-    Path to client certificate PEM file (required for mTLS)
+    Path to client certificate file (PEM format)
 
 .PARAMETER ClientKeyPath
-    Path to client private key PEM file (required if ClientCertPath provided)
+    Path to client private key file (PEM format, unencrypted)
 
 .PARAMETER ClientChainPath
-    Optional: Path to client cert chain/intermediates PEM file
+    Optional: Path to client certificate chain / intermediates (PEM)
+
+.EXAMPLE
+    .\Check-TLSCertChain.ps1 -TargetHost sd-p76h-wfnb.nam.nsroot.net -Port 9095
+
+.EXAMPLE
+    .\Check-TLSCertChain.ps1 -TargetHost internal.example.com -Port 8443 `
+        -ClientCertPath "C:\certs\client-cert.pem" `
+        -ClientKeyPath "C:\certs\client-key.pem"
 #>
 
 [CmdletBinding()]
@@ -25,132 +33,162 @@ param (
     [string]$TargetHost,
 
     [Parameter(Mandatory = $false)]
+    [ValidateRange(1,65535)]
     [int]$Port = 443,
 
     [Parameter(Mandatory = $false)]
-    [string]$ClientCertPath = $null,
+    [string]$ClientCertPath,
 
     [Parameter(Mandatory = $false)]
-    [string]$ClientKeyPath = $null,
+    [string]$ClientKeyPath,
 
     [Parameter(Mandatory = $false)]
-    [string]$ClientChainPath = $null
+    [string]$ClientChainPath
 )
 
-Write-Host "`n=== TLS Certificate Chain Check (with mTLS support): ${TargetHost}:${Port} ===" -ForegroundColor Cyan
+Write-Host "`n=== TLS/mTLS Certificate Check ===" -ForegroundColor Cyan
+Write-Host "Target : $TargetHost`:$Port" -ForegroundColor White
 
-if ($ClientCertPath -and -not (Test-Path $ClientCertPath)) {
-    Write-Error "Client cert file not found: $ClientCertPath"
+# Validate client certificate files if provided
+if ($ClientCertPath -and -not (Test-Path $ClientCertPath -PathType Leaf)) {
+    Write-Error "Client certificate file not found: $ClientCertPath"
     exit 1
 }
-if ($ClientKeyPath -and -not (Test-Path $ClientKeyPath)) {
-    Write-Error "Client key file not found: $ClientKeyPath"
+if ($ClientKeyPath -and -not (Test-Path $ClientKeyPath -PathType Leaf)) {
+    Write-Error "Client private key file not found: $ClientKeyPath"
     exit 1
 }
-if ($ClientChainPath -and -not (Test-Path $ClientChainPath)) {
+if ($ClientChainPath -and -not (Test-Path $ClientChainPath -PathType Leaf)) {
     Write-Error "Client chain file not found: $ClientChainPath"
     exit 1
 }
 
-# Build openssl args
-$args = @("-connect", "$TargetHost`:$Port", "-servername", $TargetHost, "-showcerts")
+# Build openssl s_client arguments
+$opensslArgs = @(
+    "-connect",       "$TargetHost`:$Port",
+    "-servername",    $TargetHost,
+    "-showcerts",
+    "-state",
+    "-msg",
+    "-quiet"
+)
+
+if ($ClientCertPath)   { $opensslArgs += @("-cert",   $ClientCertPath)   }
+if ($ClientKeyPath)    { $opensslArgs += @("-key",    $ClientKeyPath)    }
+if ($ClientChainPath)  { $opensslArgs += @("-cert_chain", $ClientChainPath) }
+
+Write-Verbose "Running: openssl s_client $($opensslArgs -join ' ')"
+
+# Execute openssl
+$rawOutput = "" | & openssl s_client @opensslArgs 2>&1
+$exitCode = $LASTEXITCODE
+
+# ────────────────────────────────────────────────
+#  Client Authentication Detection Logic
+# ────────────────────────────────────────────────
+
+$outputText = $rawOutput -join "`n"
+
+$serverRequestsClientCert = $outputText -match "(?i)Acceptable client certificate CA names|client certificate CA names sent"
+$clientCertWasSent        = $outputText -match "(?i)Sent client certificate|client certificate types|Certificate.*client"
+$handshakeFailedWithAlert = $outputText -match "(?i)alert bad certificate|alert number 42|alert number 43|alert number 44|SSL alert number"
+$handshakeCompleted       = ($exitCode -eq 0) -and -not $handshakeFailedWithAlert
+
+Write-Host "`nClient Authentication Status:" -ForegroundColor Magenta
+
+Write-Host "  Server requests client certificate  : " -NoNewline
+Write-Host $(if ($serverRequestsClientCert) {"Yes"} else {"No / optional"}) `
+    -ForegroundColor $(if ($serverRequestsClientCert) {"Yellow"} else {"DarkGray"})
 
 if ($ClientCertPath) {
-    $args += @("-cert", $ClientCertPath)
-    Write-Host "Using client certificate: $ClientCertPath" -ForegroundColor Yellow
-}
-if ($ClientKeyPath) {
-    $args += @("-key", $ClientKeyPath)
-}
-if ($ClientChainPath) {
-    $args += @("-cert_chain", $ClientChainPath)
-}
+    Write-Host "  Client certificate was sent         : " -NoNewline
+    Write-Host $(if ($clientCertWasSent) {"Yes"} else {"No"}) `
+        -ForegroundColor $(if ($clientCertWasSent) {"Green"} else {"Red"})
 
-# Run s_client
-Write-Verbose "Executing: openssl s_client $($args -join ' ')"
-$sclientOutput = "" | & openssl s_client @args 2>&1
-
-$exitCode = $LASTEXITCODE
-if ($exitCode -ne 0) {
-    Write-Warning "Handshake failed (exit code $exitCode). Possible reasons: client auth required but missing/invalid, name mismatch, untrusted CA."
-}
-
-# Show relevant handshake info (client auth related)
-Write-Host "`nHandshake / Client Auth Info:" -ForegroundColor Magenta
-$handshakeLines = $sclientOutput | Where-Object { 
-    $_ -match 'client certificate|Certificate chain|verify|alert|sent|CA names|depth'
-}
-$handshakeLines | ForEach-Object { Write-Host $_ -ForegroundColor DarkMagenta }
-
-# Extract ALL server-sent PEM cert blocks (chain)
-$certBlocks = @()
-$current = @()
-$inBlock = $false
-foreach ($line in $sclientOutput) {
-    if ($line -match 'BEGIN CERTIFICATE') {
-        $inBlock = $true
-        $current = @($line)
+    Write-Host "  Likely accepted by server           : " -NoNewline
+    if ($clientCertWasSent -and $handshakeCompleted) {
+        Write-Host "Yes (handshake completed without rejection)" -ForegroundColor Green
     }
-    elseif ($inBlock) {
-        $current += $line
+    elseif ($clientCertWasSent -and $handshakeFailedWithAlert) {
+        Write-Host "No - server rejected it (bad certificate alert)" -ForegroundColor Red
+    }
+    else {
+        Write-Host "Unclear / handshake did not reach certificate validation" -ForegroundColor Yellow
+    }
+}
+else {
+    Write-Host "  No client certificate provided       : Skipping acceptance check" -ForegroundColor DarkGray
+}
+
+# ────────────────────────────────────────────────
+#  Server Certificate Chain
+# ────────────────────────────────────────────────
+
+$certBlocks = @()
+$currentBlock = @()
+$inCert = $false
+
+foreach ($line in $rawOutput) {
+    if ($line -match 'BEGIN CERTIFICATE') {
+        $inCert = $true
+        $currentBlock = @($line)
+    }
+    elseif ($inCert) {
+        $currentBlock += $line
         if ($line -match 'END CERTIFICATE') {
-            $inBlock = $false
-            $certBlocks += ($current -join "`n")
-            $current = @()
+            $inCert = $false
+            $certBlocks += ($currentBlock -join "`n")
+            $currentBlock = @()
         }
     }
 }
 
 if ($certBlocks.Count -eq 0) {
-    Write-Error "No server certificates found. Raw snippet:"
-    $sclientOutput | Select-Object -First 30 | Out-Host
-    exit 1
+    Write-Warning "No server certificates were received."
+}
+else {
+    Write-Host "`nServer Certificate Chain ($($certBlocks.Count) cert(s)):" -ForegroundColor Cyan
+
+    for ($i = 0; $i -lt $certBlocks.Count; $i++) {
+        $pem = $certBlocks[$i]
+        $text = $pem | openssl x509 -noout -text 2>$null
+
+        if (-not $text) {
+            Write-Warning "Could not parse certificate #$i"
+            continue
+        }
+
+        $subject   = ($text | Select-String 'Subject:\s*(.+)').Matches.Groups[1].Value.Trim()
+        $issuer    = ($text | Select-String 'Issuer:\s*(.+)').Matches.Groups[1].Value.Trim()
+        $sigAlgo   = ($text | Select-String 'Signature Algorithm:\s*(.+)').Matches.Groups[1].Value.Trim()
+        $notBefore = ($text | Select-String 'Not Before:\s*(.+)').Matches.Groups[1].Value.Trim()
+        $notAfter  = ($text | Select-String 'Not After\s*:\s*(.+)').Matches.Groups[1].Value.Trim()
+
+        # Parse Not After date
+        $daysLeft = $null
+        if ($notAfter -match '(\w{3})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})\s+(\d{4})\s*GMT') {
+            $day = $Matches[2].PadLeft(2,'0')
+            $fixedDate = "$($Matches[1]) $day $($Matches[3]) $($Matches[4]) GMT"
+            try {
+                $expiry = [datetime]::ParseExact($fixedDate, "MMM dd HH:mm:ss yyyy 'GMT'", [Globalization.CultureInfo]::InvariantCulture)
+                $daysLeft = [math]::Floor(($expiry - [datetime]::Now).TotalDays)
+            } catch {}
+        }
+
+        Write-Host "`n  [$i] " -NoNewline -ForegroundColor White
+        Write-Host $subject -ForegroundColor Green
+        Write-Host "      Issuer          : $issuer"
+        Write-Host "      Signature Algo  : $sigAlgo"
+        Write-Host "      Valid           : $notBefore  →  $notAfter"
+
+        if ($null -ne $daysLeft) {
+            $color = if ($daysLeft -lt 0) {"Red"} elseif ($daysLeft -le 60) {"Yellow"} else {"White"}
+            Write-Host "      Days remaining  : $daysLeft" -ForegroundColor $color
+        }
+    }
 }
 
-Write-Host "`nServer Chain certificates received: $($certBlocks.Count)" -ForegroundColor Green
-Write-Host "(0 = leaf/server cert, higher = intermediates)`n" -ForegroundColor DarkGray
-
-# Process each server cert
-for ($i = 0; $i -lt $certBlocks.Count; $i++) {
-    $pem = $certBlocks[$i]
-    $certText = $pem | & openssl x509 -noout -text 2>$null
-
-    if (-not $certText) { 
-        Write-Warning "Parse failed for cert #$i"
-        continue 
-    }
-
-    $subject   = ($certText | Select-String 'Subject:\s*(.+)').Matches.Groups[1].Value.Trim()
-    $issuer    = ($certText | Select-String 'Issuer:\s*(.+)').Matches.Groups[1].Value.Trim()
-    $sigAlgo   = ($certText | Select-String 'Signature Algorithm:\s*(.+)').Matches.Groups[1].Value.Trim()
-    $notBefore = ($certText | Select-String 'Not Before:\s*(.+)').Matches.Groups[1].Value.Trim()
-    $notAfter  = ($certText | Select-String 'Not After\s*:\s*(.+)').Matches.Groups[1].Value.Trim()
-
-    # Expiry parsing (robust)
-    $daysLeft = $null
-    if ($notAfter -match '(\w{3})\s+(\d{1,2})\s+(\d{2}:\d{2}:\d{2})\s+(\d{4})\s*GMT') {
-        $dayPadded = $matches[2].PadLeft(2, '0')
-        $fixed = "$($matches[1]) $dayPadded $($matches[3]) $($matches[4]) GMT"
-        try {
-            $expiry = [datetime]::ParseExact($fixed, "MMM dd HH:mm:ss yyyy 'GMT'", [System.Globalization.CultureInfo]::InvariantCulture)
-            $daysLeft = [math]::Floor(($expiry - (Get-Date)).TotalDays)
-        } catch {}
-    }
-
-    Write-Host "Certificate #$i" -ForegroundColor Green
-    Write-Host "Subject            : $subject"
-    Write-Host "Issuer             : $issuer"
-    Write-Host "Signature Algorithm: $sigAlgo" -ForegroundColor Magenta
-    Write-Host "Validity           : $notBefore → $notAfter"
-    if ($daysLeft -ne $null) {
-        $color = if ($daysLeft -lt 0) { "Red" } elseif ($daysLeft -le 45) { "Yellow" } else { "White" }
-        Write-Host "Days left          : $daysLeft" -ForegroundColor $color
-    }
-    Write-Host ("-" * 60) -ForegroundColor DarkGray
+Write-Host "`nDone." -ForegroundColor DarkGray
+if ($exitCode -ne 0) {
+    Write-Host "Exit code: $exitCode (non-zero = handshake failed)" -ForegroundColor DarkYellow
 }
-
-
-Write-Host "- Provide valid client cert/key from Citi PKI (e.g., -ClientCertPath C:\myciti.pfx.pem -ClientKeyPath C:\myciti.key)"
-Write-Host "- If passphrase-protected key: Add -pass pass:yourphrase manually to openssl command."
-Write-Host "- Success looks like: no 'alert bad certificate', verify return:1, and possibly 'client certificate types' sent."
-
