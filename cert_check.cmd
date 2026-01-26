@@ -39,7 +39,7 @@ $ErrorActionPreference = 'Continue'
 Write-Host "`n=== TLS/mTLS Diagnostic Check ===" -ForegroundColor Cyan
 Write-Host "Target          : $TargetHost`:$Port" -ForegroundColor White
 Write-Host "Start Time      : $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor DarkGray
-Write-Host "Verbose mode    : $Verbose" -ForegroundColor DarkGray
+Write-Host "Verbose mode    : $($VerbosePreference -eq 'Continue')" -ForegroundColor DarkGray
 Write-Host "Client cert     : $(if($ClientCertPath){"provided"}else{"not provided"})" -ForegroundColor DarkGray
 
 # Validate client files if provided
@@ -57,25 +57,24 @@ if ($ClientChainPath -and -not (Test-Path $ClientChainPath -PathType Leaf)) {
 }
 
 # Build openssl arguments
+# Note: Removed -quiet (suppresses cert output) and -msg (too verbose)
 $opensslArgs = @(
     "s_client",
-    "-connect",       "$TargetHost`:$Port",
-    "-servername",    $TargetHost,
+    "-connect", "$TargetHost`:$Port",
+    "-servername", $TargetHost,
     "-showcerts",
-    "-state",
-    "-msg",
-    "-quiet"
+    "-state"
 )
 
-if ($ClientCertPath)   { $opensslArgs += @("-cert",       $ClientCertPath) }
-if ($ClientKeyPath)    { $opensslArgs += @("-key",        $ClientKeyPath)  }
+if ($ClientCertPath)   { $opensslArgs += @("-cert", $ClientCertPath) }
+if ($ClientKeyPath)    { $opensslArgs += @("-key", $ClientKeyPath) }
 if ($ClientChainPath)  { $opensslArgs += @("-cert_chain", $ClientChainPath) }
 
 Write-Verbose "Executing: openssl $($opensslArgs -join ' ')"
 
-# Run openssl
+# Run openssl - pipe empty string to stdin so it doesn't hang waiting for input
 $startTime = Get-Date
-$rawOutput = "" | & openssl @opensslArgs 2>&1
+$rawOutput = "Q" | & openssl @opensslArgs 2>&1
 $exitCode  = $LASTEXITCODE
 $duration  = (Get-Date) - $startTime
 
@@ -130,7 +129,7 @@ if ($ClientCertPath) {
 
 # Show interesting lines
 $interesting = $rawOutput | Where-Object { $_ -match '(?i)alert|verify|certificate|CA names|state|sent|depth|error' }
-if ($interesting -and $Verbose) {
+if ($interesting -and ($VerbosePreference -eq 'Continue')) {
     Write-Host "`nRelevant output lines:" -ForegroundColor DarkMagenta
     $interesting | ForEach-Object { Write-Host "  $_" }
 }
@@ -174,11 +173,17 @@ if ($certBlocks.Count -eq 0) {
             continue
         }
 
-        $subject   = ($text | Select-String 'Subject:\s*(.+)').Matches.Groups[1].Value.Trim()
-        $issuer    = ($text | Select-String 'Issuer:\s*(.+)').Matches.Groups[1].Value.Trim()
-        $sigAlgo   = ($text | Select-String 'Signature Algorithm:\s*(.+)').Matches.Groups[1].Value.Trim()
-        $notBefore = ($text | Select-String 'Not Before:\s*(.+)').Matches.Groups[1].Value.Trim()
-        $notAfter  = ($text | Select-String 'Not After\s*:\s*(.+)').Matches.Groups[1].Value.Trim()
+        $subjectMatch = $text | Select-String 'Subject:\s*(.+)'
+        $issuerMatch  = $text | Select-String 'Issuer:\s*(.+)'
+        $sigAlgoMatch = $text | Select-String 'Signature Algorithm:\s*(.+)'
+        $notBeforeMatch = $text | Select-String 'Not Before:\s*(.+)'
+        $notAfterMatch  = $text | Select-String 'Not After\s*:\s*(.+)'
+
+        $subject   = if ($subjectMatch) { $subjectMatch.Matches.Groups[1].Value.Trim() } else { "N/A" }
+        $issuer    = if ($issuerMatch) { $issuerMatch.Matches.Groups[1].Value.Trim() } else { "N/A" }
+        $sigAlgo   = if ($sigAlgoMatch) { $sigAlgoMatch.Matches.Groups[1].Value.Trim() } else { "N/A" }
+        $notBefore = if ($notBeforeMatch) { $notBeforeMatch.Matches.Groups[1].Value.Trim() } else { "N/A" }
+        $notAfter  = if ($notAfterMatch) { $notAfterMatch.Matches.Groups[1].Value.Trim() } else { "N/A" }
 
         # ────────────── Date parsing ──────────────
         $daysLeft = $null
@@ -197,11 +202,11 @@ if ($certBlocks.Count -eq 0) {
                     "MMM dd HH:mm:ss yyyy GMT",
                     [System.Globalization.CultureInfo]::InvariantCulture
                 )
-                $daysLeft = [math]::Floor(($expiry - [datetime]::Now).TotalDays)
+                $daysLeft = [math]::Floor(($expiry - [datetime]::UtcNow).TotalDays)
                 Write-Verbose "Parsed successfully → $expiry ($daysLeft days left)"
             }
             catch {
-                Write-Warning "Date parsing failed for cert #$i: $($_.Exception.Message)"
+                Write-Warning "Date parsing failed for cert #$i`: $($_.Exception.Message)"
                 Write-Verbose "Input was: $notAfter"
             }
         }
