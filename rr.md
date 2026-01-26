@@ -1,154 +1,90 @@
-Sub-task 1: Automate Consumer Group Deletion
+Root Cause Analysis (RCA)
 
-Description
-Automate deletion of Kafka consumer groups with strict validation and safety controls.
+Incident: Kafka client connectivity failure after broker certificate renewal
+Client: CSF
+Platform Team: STP
 
-Scope
+Summary
 
-Delete explicitly specified consumer groups only
+During a scheduled certificate renewal, Kafka broker certificates were upgraded from Citi Device CA1 G2 to Citi Device CA2 G2. After the upgrade, CSF client applications were unable to establish TLS connections due to a missing intermediate CA certificate in the client trust store.
 
-Validate group existence and ensure group state is Empty
+To immediately restore service, the STP team temporarily rolled back the broker certificate to Citi Device CA1 G1, which was already trusted by the client. However, Citi Device CA1 G1 is deprecated and cannot be used as a long-term solution. The target and compliant state remains Citi Device CA2 G2.
 
-Capture offset snapshot before deletion
+Impact
 
-Block protected/system consumer groups
+CSF client applications experienced TLS connection failures to Kafka brokers.
 
-Acceptance Criteria
+Kafka message flow for CSF applications was interrupted.
 
-Dry-run shows groups targeted for deletion
+No data loss occurred.
 
-Deletion fails if group has active members
+Temporary reliance on a deprecated CA to restore service.
 
-Audit log includes group name, offsets snapshot, and execution result
+Timeline
 
-No wildcard deletions allowed in PROD
+T0: Kafka broker certificates upgraded from Citi Device CA1 G2 to Citi Device CA2 G2.
 
-Sub-task 2: Automate Topic Deletion
+T0 + shortly after: CSF applications failed TLS handshakes.
 
-Description
-Automate Kafka topic deletion with pre-checks and metadata capture.
+T1: STP identified missing Citi Device CA2 G2 intermediate CA in CSF trust store.
 
-Scope
+T2: Temporary rollback to Citi Device CA1 G1 to restore connectivity.
 
-Delete explicitly listed topics only
+T3: CSF connectivity restored.
 
-Block deletion of internal/protected topics
+T4 (Planned): Re-deploy Citi Device CA2 G2 after client trust store validation.
 
-Capture topic metadata (partitions, RF, configs) before deletion
+Root Cause
 
-Validate delete.topic.enable=true
+The CSF client trust store did not include the Citi Device CA2 G2 intermediate CA, resulting in TLS certificate chain validation failure after the broker certificate upgrade.
 
-Acceptance Criteria
+Contributing Factors
 
-Dry-run displays topics and metadata to be deleted
+Certificate renewal involved a change in CA hierarchy.
 
-Protected topics cannot be deleted
+Client trust store readiness was not validated prior to the broker certificate upgrade.
 
-Topic config snapshot is stored before deletion
+Operational urgency required a temporary rollback to restore service.
 
-Audit log captures topic name and execution outcome
+Resolution
 
-Sub-task 3: Automate Kafka ACL Grant and Removal
+Kafka broker certificates were temporarily rolled back to Citi Device CA1 G1 to restore service.
 
-Description
-Provide controlled automation for managing Kafka ACLs using ZooKeeper-backed authorization.
+This rollback is temporary only, as G1 is deprecated.
 
-Scope
+Risk & Compliance Statement
 
-Grant and revoke ACLs for Topic, Group, Cluster, and TransactionalId
+Citi Device CA1 G1 is deprecated and must be fully retired.
 
-Support LITERAL and restricted PREFIXED patterns
+Kafka brokers must operate with Citi Device CA2 G2 to remain compliant.
 
-Display ACL diff in dry-run mode
+Temporary rollback approved strictly as a short-term mitigation.
 
-Validate principal and resource inputs
+Corrective & Preventive Actions
+Immediate
 
-Acceptance Criteria
+CSF to add Citi Device CA2 G2 intermediate CA to the client trust store.
 
-Dry-run shows exact ACL changes (before vs after)
+Short-Term
 
-No wildcard ACLs allowed in PROD
+Ensure all Kafka clients have fully moved away from CA1 or have the complete CA2 certificate chain present in their trust stores.
 
-ACL rollback supported via inverse operation
+Re-deploy Kafka broker certificates using Citi Device CA2 G2 after confirming client readiness.
 
-ACL changes are fully auditable
+Long-Term
 
-Sub-task 4: Automate Consumer Group Offset Management
+Maintain an inventory of all Kafka clients and their trusted CA chains.
 
-Description
-Automate consumer group offset reset, export, and import operations.
+Enforce a mandatory validation checkpoint to confirm all clients trust CA2 before retiring CA1.
 
-Scope
+Prevent long-term use of deprecated CAs without formal risk acceptance.
 
-Offset reset strategies:
+Update Kafka operational runbooks to include certificate chain dependency checks and client confirmation steps.
 
-earliest, latest
+Status
 
-timestamp, duration
+Service restored via temporary mitigation
 
-absolute offset
+Permanent remediation in progress
 
-Enforce inactive (Empty) consumer group requirement
-
-Export offsets prior to modification
-
-Acceptance Criteria
-
-Dry-run displays offset delta before execution
-
-Offset reset fails if group is active
-
-Offset snapshot is captured before apply
-
-Rollback supported if snapshot exists
-
-Sub-task 5: Automate Topic Message Count Calculation
-
-Description
-Provide topic message count capability using safe, offset-based estimation.
-
-Scope
-
-Calculate message count using:
-
-endOffset - earliestOffset per partition
-
-Provide partition-level and aggregated output
-
-Clearly label counts as estimates
-
-Acceptance Criteria
-
-Output includes per-partition offsets and total count
-
-Compacted topic caveats are documented
-
-No full topic scan in PROD by default
-
-Results are timestamped and auditable
-
-Security & Compliance Requirements
-
-mTLS authentication using platform-approved certificates
-
-Kafka ACL validation before execution
-
-Protected resources enforced via deny-list
-
-Immutable audit logs per execution
-
-PROD execution requires ticket reference and approval metadata
-
-Dependencies
-
-Kafka Admin client access with mTLS
-
-Required Kafka ACLs for admin service principal
-
-Approved protected resource allow/deny lists
-
-Definition of Done
-
-All sub-tasks implemented and tested in DEV and UAT
-
-PROD execution gated and validated
+Target state: All Kafka brokers and clients operating exclusively with Citi Device CA2 G2
