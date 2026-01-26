@@ -149,8 +149,8 @@ for ($i = 0; $i -lt $certBlocks.Count; $i++) {
     Write-Host ("-" * 60) -ForegroundColor DarkGray
 }
 
-Write-Host "`nTips for Citi/nsroot.net mTLS:" -ForegroundColor Cyan
+
 Write-Host "- Provide valid client cert/key from Citi PKI (e.g., -ClientCertPath C:\myciti.pfx.pem -ClientKeyPath C:\myciti.key)"
 Write-Host "- If passphrase-protected key: Add -pass pass:yourphrase manually to openssl command."
 Write-Host "- Success looks like: no 'alert bad certificate', verify return:1, and possibly 'client certificate types' sent."
-Write-Host "- If still fails: Check server logs or contact Citi security team for required client cert issuer.`n"
+
