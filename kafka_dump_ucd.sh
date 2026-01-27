@@ -18,6 +18,9 @@ UCD_RUN_ID="${UCD_RUN_ID:-"$(date +%s)"}"
 # Track sensitive files for secure cleanup
 declare -a SENSITIVE_FILES=()
 
+# Track temp files for cleanup on exit (e.g. upload response bodies)
+declare -a TEMP_FILES=()
+
 # ----------------------------------------------------------------------------
 # Cleanup on exit (success or failure)
 # ----------------------------------------------------------------------------
@@ -29,6 +32,13 @@ cleanup() {
         if [[ -f "$f" ]]; then
             # Overwrite before deletion for sensitive data
             shred -u "$f" 2>/dev/null || rm -f "$f" 2>/dev/null || true
+        fi
+    done
+    
+    # Remove temp files (e.g. upload_file response bodies)
+    for f in "${TEMP_FILES[@]:-}"; do
+        if [[ -f "$f" ]]; then
+            rm -f "$f" 2>/dev/null || true
         fi
     done
     
@@ -55,7 +65,7 @@ TOPIC="${TOPIC:-}"
 KAFKA_BOOTSTRAP="${KAFKA_BOOTSTRAP:-}"
 OTP="${OTP:-}"
 REQUESTOR="${REQUESTOR:-"ucd-user"}"
-KAFKA_TIMEOUT_MS="${KAFKA_TIMEOUT_MS:-$KAFKA_TIMEOUT_MS}"
+KAFKA_TIMEOUT_MS="${KAFKA_TIMEOUT_MS:-120000}"
 
 ARTIFACTORY_BASE_URL="${ARTIFACTORY_BASE_URL:-}"
 ARTIFACTORY_USER="${ARTIFACTORY_USER:-}"
@@ -119,6 +129,9 @@ fi
 if [[ ! "$TOPIC" =~ ^[A-Za-z0-9._-]+$ ]]; then
     fail "TOPIC contains invalid characters"
 fi
+if [[ ! "$REQUESTOR" =~ ^[A-Za-z0-9._@-]+$ ]]; then
+    fail "REQUESTOR contains invalid characters"
+fi
 
 # ============================================================================
 # Normalize bootstrap servers; append :9094 if no port provided
@@ -162,7 +175,7 @@ mkdir -p "$BASE_DIR"
 touch "$AUDIT_LOG"
 chmod 600 "$AUDIT_LOG"
 
-WORKDIR="${BASE_DIR}/${INC}/${REQ}/${TOPIC}"
+WORKDIR="${BASE_DIR}/${INC}/${REQ}/${TOPIC}/${UCD_RUN_ID}"
 mkdir -p "$WORKDIR"
 chmod 700 "$WORKDIR"
 
@@ -296,24 +309,32 @@ fi
 # Use awk to avoid whitespace issues with wc
 MSG_COUNT=$(awk 'END {print NR}' "$DUMP_FILE")
 DUMP_SIZE=$(stat -c%s "$DUMP_FILE")
-log INFO "Dump complete — ${MSG_COUNT} messages, ${DUMP_SIZE} bytes"
+log INFO "Dump complete - ${MSG_COUNT} messages, ${DUMP_SIZE} bytes"
 audit "DUMP_COMPLETE" "messages=${MSG_COUNT}, size=${DUMP_SIZE}"
 
 # ============================================================================
 # Metadata + Encryption
 # ============================================================================
 META_FILE="${WORKDIR}/metadata.json"
+# Use json_escape for string fields to avoid JSON injection
+meta_inc=$(json_escape "$INC")
+meta_req=$(json_escape "$REQ")
+meta_topic=$(json_escape "$TOPIC")
+meta_bootstrap=$(json_escape "$KAFKA_BOOTSTRAP")
+meta_run_id=$(json_escape "$UCD_RUN_ID")
+meta_requestor=$(json_escape "$REQUESTOR")
+meta_timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 cat > "$META_FILE" <<EOF
 {
-  "inc": "${INC}",
-  "req": "${REQ}",
-  "topic": "${TOPIC}",
-  "bootstrap": "${KAFKA_BOOTSTRAP}",
+  "inc": "${meta_inc}",
+  "req": "${meta_req}",
+  "topic": "${meta_topic}",
+  "bootstrap": "${meta_bootstrap}",
   "message_count": ${MSG_COUNT},
   "dump_size_bytes": ${DUMP_SIZE},
-  "run_id": "${UCD_RUN_ID}",
-  "requestor": "${REQUESTOR}",
-  "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+  "run_id": "${meta_run_id}",
+  "requestor": "${meta_requestor}",
+  "timestamp": "${meta_timestamp}",
   "script_version": "2.0.0"
 }
 EOF
@@ -367,17 +388,26 @@ CURL_HEADER_FILE=$(mktemp)
 chmod 600 "$CURL_HEADER_FILE"
 printf "Authorization: Basic %s\n" "$(printf '%s:%s' "$ARTIFACTORY_USER" "$ARTIFACTORY_PASSWORD" | base64)" > "$CURL_HEADER_FILE"
 
+# upload_file src_file dest_url [artifact_type]
+# artifact_type: "artifact" (default) = send X-Checksum-Sha256 header; "checksum" = omit it
 upload_file() {
     local src_file="$1"
     local dest_url="$2"
+    local artifact_type="${3:-artifact}"
     local attempt=1
     local max_attempts=3
     local http_code
     local response_body
     local temp_response
-    
+
     temp_response=$(mktemp)
-    
+    TEMP_FILES+=("$temp_response")
+
+    local -a curl_headers=(-H @"$CURL_HEADER_FILE")
+    if [[ "$artifact_type" != "checksum" ]]; then
+        curl_headers+=(-H "X-Checksum-Sha256: $CHECKSUM")
+    fi
+
     while (( attempt <= max_attempts )); do
         log INFO "Upload attempt $attempt of $max_attempts to $dest_url"
 
@@ -386,8 +416,7 @@ upload_file() {
             --max-time "$CURL_TIMEOUT" \
             -w "%{http_code}" \
             -o "$temp_response" \
-            -H @"$CURL_HEADER_FILE" \
-            -H "X-Checksum-Sha256: $CHECKSUM" \
+            "${curl_headers[@]}" \
             -X PUT \
             -T "$src_file" \
             "$dest_url" 2>> "$LOG_FILE")
@@ -395,11 +424,10 @@ upload_file() {
         log INFO "HTTP response code: $http_code"
 
         if [[ "$http_code" == "200" || "$http_code" == "201" ]]; then
-            rm -f "$temp_response"
             return 0
         fi
 
-        # Log response body for debugging (truncated)
+        # Log response body for debugging (truncated, JSON-escaped)
         if [[ -s "$temp_response" ]]; then
             response_body=$(head -c 500 "$temp_response")
             log ERROR "Response body: $response_body"
@@ -410,7 +438,6 @@ upload_file() {
         (( attempt++ ))
     done
 
-    rm -f "$temp_response"
     return 1
 }
 
@@ -421,8 +448,8 @@ fi
 log INFO "Encrypted file uploaded successfully"
 audit "UPLOAD_COMPLETE" "url=$UPLOAD_URL"
 
-# Upload checksum file
-if ! upload_file "$CHECKSUM_FILE" "$CHECKSUM_URL"; then
+# Upload checksum file (omit X-Checksum-Sha256 header for the checksum artifact)
+if ! upload_file "$CHECKSUM_FILE" "$CHECKSUM_URL" "checksum"; then
     log WARN "Checksum file upload failed (non-fatal)"
 else
     log INFO "Checksum file uploaded successfully"
