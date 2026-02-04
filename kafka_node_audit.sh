@@ -637,15 +637,29 @@ for i in "${ifaces[@]}"; do
   printf "  Speed : %s\n" "${speed:-unknown}"
   printf "  Duplex: %s\n" "${duplex:-unknown}"
   
-  # Check for high-speed NICs
-  if [[ "${speed//[[:space:]]/}" =~ ^25000Mb/s|^25Gb ]]; then
-    pass "  25Gb capable NIC detected"
+  # Check for network speed (normalize speed string for comparison)
+  speed_normalized="${speed//[[:space:]]/}"
+  
+  # Detect 25Gb NICs (25000Mb/s or 25Gb/s)
+  if [[ "$speed_normalized" =~ ^25000Mb/s$ ]] || [[ "$speed_normalized" =~ ^25Gb/s$ ]]; then
+    pass "  25 Gb/s network detected (excellent for Kafka)"
     has25g=1
     iface_25g["$i"]=1
-  elif [[ "${speed//[[:space:]]/}" =~ ^10000Mb/s|^10Gb ]]; then
-    info "  10Gb NIC detected"
+  
+  # Detect 10Gb NICs (10000Mb/s or 10Gb/s)
+  elif [[ "$speed_normalized" =~ ^10000Mb/s$ ]] || [[ "$speed_normalized" =~ ^10Gb/s$ ]]; then
+    pass "  10 Gb/s network detected (good for Kafka)"
     has10g=1
     iface_10g["$i"]=1
+  
+  # Detect 1Gb NICs (1000Mb/s or 1Gb/s)
+  elif [[ "$speed_normalized" =~ ^1000Mb/s$ ]] || [[ "$speed_normalized" =~ ^1000baseT/Full$ ]] || [[ "$speed_normalized" =~ ^1Gb/s$ ]]; then
+    info "  1 Gb/s network detected (adequate for small-medium Kafka clusters)"
+  
+  # Unknown or slow speed
+  elif [[ -n "$speed" ]] && [[ "$speed" != "unknown" ]]; then
+    warn "  Unexpected network speed: $speed"
+    info "    Recommended: 10 Gb/s or 25 Gb/s for production Kafka"
   fi
   
   # Check MTU for jumbo frames
@@ -683,12 +697,14 @@ for i in "${ifaces[@]}"; do
 done
 
 if ((has25g == 1)); then
-  pass "At least one 25Gb NIC detected"
+  pass "Network: At least one 25 Gb/s NIC detected (excellent for Kafka)"
 elif ((has10g == 1)); then
-  info "10Gb NICs detected (25Gb recommended for high-throughput Kafka)"
+  pass "Network: 10 Gb/s NICs detected (good for Kafka)"
+  info "  Note: 25 Gb/s recommended for very high-throughput clusters"
 else
-  warn "No 25Gb or 10Gb NIC detected (may limit Kafka performance)"
-  info "  Recommendation: Consider upgrading to 10Gb or 25Gb NICs for production Kafka"
+  warn "Network: No 10 Gb/s or 25 Gb/s NIC detected"
+  info "  Current setup may limit Kafka performance for high-throughput workloads"
+  info "  Recommendation: 10 Gb/s minimum, 25 Gb/s preferred for production Kafka"
 fi
 
 # =============================================================================
@@ -745,10 +761,13 @@ fi
 # =============================================================================
 section "BONDING"
 
+# Check if any bonding interfaces exist
+bond_found=0
 if compgen -G "/proc/net/bonding/*" >/dev/null 2>&1; then
   for bf in /proc/net/bonding/*; do
     [[ -e "$bf" ]] || continue
     bname=$(basename "$bf")
+    bond_found=1
     
     echo ""
     info "Bond: $bname"
@@ -759,21 +778,48 @@ if compgen -G "/proc/net/bonding/*" >/dev/null 2>&1; then
     awk '/Slave Interface/ {iface=$3} 
          /MII Status/ && iface {printf "  Slave %-10s link %s\n", iface, $3; iface=""}' "$bf"
     
-    pass "Bond $bname configured ($mode)"
+    pass "Bond $bname is configured and active"
     
-    # Recommendation for Kafka
+    # Recommendation based on bonding mode
     if [[ "$mode" =~ 802\.3ad|LACP|mode[[:space:]]4 ]]; then
-      pass "  LACP/802.3ad mode is optimal for Kafka throughput"
+      pass "  Mode: LACP/802.3ad (optimal for Kafka throughput and redundancy)"
     elif [[ "$mode" =~ balance-rr|mode[[:space:]]0 ]]; then
-      info "  balance-rr mode: verify switch configuration supports this"
+      info "  Mode: balance-rr (Round-Robin)"
+      info "    Verify: Switch must support this mode for proper operation"
     elif [[ "$mode" =~ active-backup|mode[[:space:]]1 ]]; then
-      warn "  active-backup mode: consider LACP for better throughput"
-      info "  Recommendation: Configure 802.3ad LACP bonding for Kafka"
+      info "  Mode: active-backup (failover only)"
+      if [[ "$virt_kind" == "physical" ]]; then
+        warn "    For physical servers: LACP (802.3ad) recommended for better throughput"
+        info "    Recommendation: Configure 802.3ad LACP bonding for production Kafka"
+      else
+        info "    Note: LACP would provide better throughput but active-backup is acceptable for VMs"
+      fi
+    elif [[ "$mode" =~ balance-xor|mode[[:space:]]2 ]]; then
+      info "  Mode: balance-xor (load balancing)"
+    elif [[ "$mode" =~ broadcast|mode[[:space:]]3 ]]; then
+      info "  Mode: broadcast"
+    elif [[ "$mode" =~ balance-tlb|mode[[:space:]]5 ]]; then
+      info "  Mode: balance-tlb (Transmit Load Balancing)"
+    elif [[ "$mode" =~ balance-alb|mode[[:space:]]6 ]]; then
+      info "  Mode: balance-alb (Adaptive Load Balancing)"
     fi
   done
-else
+fi
+
+# Display bonding status summary
+if ((bond_found == 0)); then
   info "No Linux bonding configured"
-  info "  Recommendation: Consider NIC bonding for redundancy and throughput"
+  
+  # Different recommendations for VMs vs physical servers
+  if [[ "$virt_kind" == "vm" ]]; then
+    info "  Virtual Machine: Bonding not required (hypervisor handles redundancy)"
+    info "  Note: If high availability is critical, bonding can still be beneficial"
+  else
+    info "  Physical Server: Bonding recommended for production Kafka"
+    info "  Benefits: Network redundancy and increased throughput"
+    info "  Recommendation: Configure LACP (802.3ad) bonding with 2+ NICs"
+    info "    Example: bond0 with mode=802.3ad, slaves=eth0,eth1"
+  fi
 fi
 
 # =============================================================================
