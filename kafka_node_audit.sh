@@ -31,24 +31,241 @@
 set -euo pipefail
 
 # Configuration with defaults
-: "${SERVICE_USER:=}"  # Will auto-detect from running Kafka process
 : "${MIN_NOFILE:=100000}"  # Confluent Production Recommendation: 100,000 minimum
 : "${MIN_NPROC:=65536}"    # cp-ansible standard: 65,536 (increased from 4096)
-: "${CONFLUENT_HOME:=/opt/confluent}"
-: "${SERVER_PROPS_PATH:=}"
 
-# Auto-detect Kafka service user from running process
-if [[ -z "$SERVICE_USER" ]]; then
-  KAFKA_PID=$(pgrep -f "kafka\.Kafka" | head -n1)
-  if [[ -n "$KAFKA_PID" ]]; then
-    SERVICE_USER=$(ps -o user= -p "$KAFKA_PID" 2>/dev/null | tr -d ' ')
-    if [[ -z "$SERVICE_USER" ]]; then
-      SERVICE_USER="stekafka"  # Fallback to default
+# Installation detection variables - will be set during detection
+INSTALL_TYPE="unknown"     # "rpm" or "archive"
+SERVICE_USER=""            # Auto-detected based on install type
+CONFLUENT_HOME=""          # Confluent/Kafka installation directory
+KAFKA_HOME=""              # Kafka binaries directory
+KAFKA_CONF_DIR=""          # Configuration directory
+KAFKA_LOG_DIR=""           # Log directory
+SERVER_PROPS_PATH=""       # Path to server.properties
+
+# =============================================================================
+# DETECT INSTALLATION TYPE AND CONFIGURE PATHS
+# =============================================================================
+
+detect_installation() {
+  # Priority order for detection:
+  # 1. Check for RPM/DEB packages
+  # 2. Check for RPM directory structure (/usr/share/java/kafka + /etc/kafka)
+  # 3. Check running Kafka process for clues
+  # 4. Check common archive installation locations
+  # 5. Use environment variable overrides
+  
+  local install_type="unknown"
+  local service_user=""
+  local kafka_home=""
+  local conf_dir=""
+  local props_path=""
+  local log_dir=""
+  
+  # Method 1: Check for RPM packages (most reliable)
+  if command -v rpm &>/dev/null; then
+    if rpm -qa 2>/dev/null | grep -qE '^(confluent-server|confluent-kafka|confluent-community)'; then
+      install_type="rpm"
+      kafka_home="/usr/share/java/kafka"
+      conf_dir="/etc/kafka"
+      props_path="/etc/kafka/server.properties"
+      log_dir="/var/log/kafka"
+      service_user="cp-kafka"
     fi
-  else
-    SERVICE_USER="stekafka"  # Fallback if Kafka not running
   fi
-fi
+  
+  # Method 2: Check for DEB packages
+  if [[ "$install_type" == "unknown" ]] && command -v dpkg &>/dev/null; then
+    if dpkg -l 2>/dev/null | grep -qE '^ii.*(confluent-server|confluent-kafka|confluent-community)'; then
+      install_type="rpm"  # DEB installations follow RPM directory structure
+      kafka_home="/usr/share/java/kafka"
+      conf_dir="/etc/kafka"
+      props_path="/etc/kafka/server.properties"
+      log_dir="/var/log/kafka"
+      service_user="cp-kafka"
+    fi
+  fi
+  
+  # Method 3: Check for RPM directory structure (package may have been removed but files remain)
+  if [[ "$install_type" == "unknown" ]]; then
+    if [[ -d /usr/share/java/kafka ]] && [[ -d /etc/kafka ]]; then
+      install_type="rpm"
+      kafka_home="/usr/share/java/kafka"
+      conf_dir="/etc/kafka"
+      log_dir="/var/log/kafka"
+      service_user="cp-kafka"
+      
+      # Find server.properties in /etc/kafka
+      if [[ -f /etc/kafka/server.properties ]]; then
+        props_path="/etc/kafka/server.properties"
+      elif [[ -f /etc/kafka/kraft/server.properties ]]; then
+        props_path="/etc/kafka/kraft/server.properties"
+      fi
+    fi
+  fi
+  
+  # Method 4: Check running Kafka process for installation clues
+  if [[ "$install_type" == "unknown" ]]; then
+    local kafka_pid=$(pgrep -f "kafka\.Kafka" 2>/dev/null | head -n1 || echo "")
+    
+    if [[ -n "$kafka_pid" ]] && [[ -r "/proc/$kafka_pid/cmdline" ]]; then
+      local cmdline=$(tr '\0' ' ' < "/proc/$kafka_pid/cmdline" 2>/dev/null || echo "")
+      
+      # Detect from classpath
+      if [[ "$cmdline" =~ -cp[[:space:]]+([^[:space:]]+) ]]; then
+        local classpath="${BASH_REMATCH[1]}"
+        
+        # RPM installation signature
+        if [[ "$classpath" =~ /usr/share/java/kafka ]]; then
+          install_type="rpm"
+          kafka_home="/usr/share/java/kafka"
+          conf_dir="/etc/kafka"
+          log_dir="/var/log/kafka"
+          service_user="cp-kafka"
+          
+        # Archive installation signature
+        elif [[ "$classpath" =~ (/opt/[^:]+|/home/[^:]+|/usr/local/[^:]+) ]]; then
+          install_type="archive"
+          local base_path="${BASH_REMATCH[1]}"
+          
+          # Clean up the path to get base directory
+          base_path=$(echo "$base_path" | sed 's|/lib.*||')
+          
+          kafka_home="$base_path"
+          log_dir="$base_path/logs"
+          
+          # Determine config directory
+          if [[ -d "$base_path/etc/kafka" ]]; then
+            conf_dir="$base_path/etc/kafka"
+          elif [[ -d "$base_path/config" ]]; then
+            conf_dir="$base_path/config"
+          fi
+        fi
+      fi
+      
+      # Extract server.properties path from command line
+      if [[ "$cmdline" =~ [[:space:]]([^[:space:]]+/server\.properties) ]]; then
+        props_path="${BASH_REMATCH[1]}"
+        if [[ -z "$conf_dir" ]]; then
+          conf_dir=$(dirname "$props_path")
+        fi
+      fi
+      
+      # Get service user from running process
+      service_user=$(ps -o user= -p "$kafka_pid" 2>/dev/null | tr -d ' ' || echo "")
+    fi
+  fi
+  
+  # Method 5: Check common archive installation directories
+  if [[ "$install_type" == "unknown" ]]; then
+    for base_dir in /opt/confluent /opt/kafka /usr/local/confluent /usr/local/kafka; do
+      if [[ -d "$base_dir" ]]; then
+        install_type="archive"
+        kafka_home="$base_dir"
+        log_dir="$base_dir/logs"
+        
+        # Find config directory
+        if [[ -d "$base_dir/etc/kafka" ]]; then
+          conf_dir="$base_dir/etc/kafka"
+          if [[ -f "$base_dir/etc/kafka/server.properties" ]]; then
+            props_path="$base_dir/etc/kafka/server.properties"
+          fi
+        elif [[ -d "$base_dir/config" ]]; then
+          conf_dir="$base_dir/config"
+          if [[ -f "$base_dir/config/server.properties" ]]; then
+            props_path="$base_dir/config/server.properties"
+          fi
+        fi
+        
+        # Default service user for archive
+        if [[ -z "$service_user" ]]; then
+          service_user="kafka"
+        fi
+        
+        break
+      fi
+    done
+  fi
+  
+  # Method 6: Environment variable overrides (highest priority)
+  if [[ -n "${CONFLUENT_HOME_OVERRIDE:-}" ]]; then
+    kafka_home="$CONFLUENT_HOME_OVERRIDE"
+    install_type="archive"
+  fi
+  
+  if [[ -n "${SERVICE_USER_OVERRIDE:-}" ]]; then
+    service_user="$SERVICE_USER_OVERRIDE"
+  fi
+  
+  if [[ -n "${SERVER_PROPS_OVERRIDE:-}" ]]; then
+    props_path="$SERVER_PROPS_OVERRIDE"
+  fi
+  
+  # Fallback: Use running process user if still not detected
+  if [[ -z "$service_user" ]]; then
+    local kafka_pid=$(pgrep -f "kafka\.Kafka" 2>/dev/null | head -n1 || echo "")
+    if [[ -n "$kafka_pid" ]]; then
+      service_user=$(ps -o user= -p "$kafka_pid" 2>/dev/null | tr -d ' ' || echo "")
+    fi
+  fi
+  
+  # Final fallbacks
+  if [[ -z "$service_user" ]]; then
+    if [[ "$install_type" == "rpm" ]]; then
+      service_user="cp-kafka"
+    else
+      service_user="kafka"
+    fi
+  fi
+  
+  if [[ -z "$kafka_home" ]]; then
+    kafka_home="/opt/confluent"
+  fi
+  
+  if [[ -z "$conf_dir" ]]; then
+    if [[ "$install_type" == "rpm" ]]; then
+      conf_dir="/etc/kafka"
+    else
+      conf_dir="$kafka_home/etc/kafka"
+    fi
+  fi
+  
+  if [[ -z "$log_dir" ]]; then
+    if [[ "$install_type" == "rpm" ]]; then
+      log_dir="/var/log/kafka"
+    else
+      log_dir="$kafka_home/logs"
+    fi
+  fi
+  
+  # Try to find server.properties if not already found
+  if [[ -z "$props_path" ]] || [[ ! -f "$props_path" ]]; then
+    for candidate in \
+      "$conf_dir/server.properties" \
+      "$conf_dir/kraft/server.properties" \
+      "/etc/kafka/server.properties" \
+      "/etc/kafka/kraft/server.properties" \
+      "$kafka_home/etc/kafka/server.properties" \
+      "$kafka_home/config/server.properties"; do
+      if [[ -f "$candidate" ]]; then
+        props_path="$candidate"
+        break
+      fi
+    done
+  fi
+  
+  # Set global variables
+  INSTALL_TYPE="$install_type"
+  SERVICE_USER="$service_user"
+  KAFKA_HOME="$kafka_home"
+  CONFLUENT_HOME="$kafka_home"
+  KAFKA_CONF_DIR="$conf_dir"
+  KAFKA_LOG_DIR="$log_dir"
+  SERVER_PROPS_PATH="$props_path"
+}
+
+# Run installation detection
+detect_installation
 
 # Counters for summary
 PASS_COUNT=0
@@ -227,10 +444,44 @@ fi
 
 printf "Virtualization: kind=%s, hypervisor=%s\n" "$virt_kind" "$hypervisor"
 
+# Display detected installation information
+printf "\nKafka Installation:\n"
+printf "  Type            : %s\n" "${INSTALL_TYPE:-unknown}"
+printf "  Service User    : %s\n" "${SERVICE_USER:-unknown}"
+printf "  Kafka Home      : %s\n" "${KAFKA_HOME:-unknown}"
+printf "  Config Dir      : %s\n" "${KAFKA_CONF_DIR:-unknown}"
+printf "  Log Dir         : %s\n" "${KAFKA_LOG_DIR:-unknown}"
+
+if [[ -n "$SERVER_PROPS_PATH" ]] && [[ -f "$SERVER_PROPS_PATH" ]]; then
+  printf "  server.properties: %s " "$SERVER_PROPS_PATH"
+  printf "(found)\n"
+elif [[ -n "$SERVER_PROPS_PATH" ]]; then
+  printf "  server.properties: %s " "$SERVER_PROPS_PATH"
+  printf "(not found)\n"
+else
+  printf "  server.properties: not detected\n"
+fi
+
+# Provide guidance based on installation type
+if [[ "$INSTALL_TYPE" == "rpm" ]]; then
+  info "RPM/DEB package installation detected"
+  if ! id "$SERVICE_USER" &>/dev/null; then
+    warn "Service user '$SERVICE_USER' does not exist yet (normal for fresh install)"
+  fi
+elif [[ "$INSTALL_TYPE" == "archive" ]]; then
+  info "Archive (tarball) installation detected"
+  if [[ ! -d "$KAFKA_HOME" ]]; then
+    warn "Kafka home directory '$KAFKA_HOME' not found"
+  fi
+else
+  warn "Could not detect installation type - may need manual configuration"
+  info "  You can set: CONFLUENT_HOME_OVERRIDE, SERVICE_USER_OVERRIDE, SERVER_PROPS_OVERRIDE"
+fi
+
 # Check tuned profile
 if has_cmd tuned-adm; then
   tuned_state=$(systemctl is-active tuned 2>/dev/null || echo "inactive")
-  active_profile=$(tuned-adm active 2>/dev/null | awk -F': ' '/Current active profile/{print $2}' | tr -d ' ')
+  active_profile=$(tuned-adm active 2>/dev/null | awk -F': ' '/Current active profile/{print $2}' | tr -d ' ' || echo "")
   
   printf "tuned service : %s\n" "$tuned_state"
   printf "active profile: %s\n" "${active_profile:-unknown}"
@@ -376,8 +627,8 @@ for i in "${ifaces[@]}"; do
   speed=""
   duplex=""
   if has_cmd ethtool; then
-    speed="$(ethtool "$i" 2>/dev/null | awk -F': ' '/Speed/{print $2}' | tr -d ' ')"
-    duplex="$(ethtool "$i" 2>/dev/null | awk -F': ' '/Duplex/{print $2}' | tr -d ' ')"
+    speed="$(ethtool "$i" 2>/dev/null | awk -F': ' '/Speed/{print $2}' | tr -d ' ' || echo "")"
+    duplex="$(ethtool "$i" 2>/dev/null | awk -F': ' '/Duplex/{print $2}' | tr -d ' ' || echo "")"
   fi
   
   printf "\nInterface: %s\n" "$i"
@@ -448,7 +699,7 @@ section "ROUTING & STATIC ROUTES"
 if ! has_cmd ip; then
   warn "'ip' command not available; cannot inspect routing table"
 else
-  default_route=$(ip route show default 2>/dev/null | head -n1)
+  default_route=$(ip route show default 2>/dev/null | head -n1 || echo "")
   printf "Default Route : %s\n" "${default_route:-none}"
   
   default_gw=$(awk '/^default / {for (i=1;i<=NF;i++) if ($i=="via") print $(i+1)}' <<<"$default_route")
@@ -640,42 +891,119 @@ fi
 # =============================================================================
 section "KAFKA INSTALLATION TYPE"
 
-# Detect Confluent Server vs Apache Kafka
-kafka_package_found=0
-if command -v rpm &>/dev/null; then
-  if rpm -q confluent-server &>/dev/null 2>&1; then
-    pass "Confluent Server detected (commercial features available)"
-    confluent_version=$(rpm -q confluent-server --queryformat '%{VERSION}' 2>/dev/null || echo "unknown")
-    printf "  Version: %s\n" "$confluent_version"
-    kafka_package_found=1
-  elif rpm -q confluent-kafka &>/dev/null 2>&1; then
-    info "Apache Kafka (Confluent distribution) detected"
-    kafka_version=$(rpm -q confluent-kafka --queryformat '%{VERSION}' 2>/dev/null || echo "unknown")
-    printf "  Version: %s\n" "$kafka_version"
-    kafka_package_found=1
-  elif rpm -q confluent-community-kafka &>/dev/null 2>&1; then
-    info "Confluent Community Kafka detected"
-    kafka_version=$(rpm -q confluent-community-kafka --queryformat '%{VERSION}' 2>/dev/null || echo "unknown")
-    printf "  Version: %s\n" "$kafka_version"
-    kafka_package_found=1
+printf "Installation Type: %s\n" "${INSTALL_TYPE:-unknown}"
+printf "\nInstallation Details:\n"
+printf "  Kafka Home      : %s\n" "${KAFKA_HOME:-not detected}"
+printf "  Config Directory: %s\n" "${KAFKA_CONF_DIR:-not detected}"
+printf "  Log Directory   : %s\n" "${KAFKA_LOG_DIR:-not detected}"
+
+if [[ -n "$SERVER_PROPS_PATH" ]]; then
+  if [[ -f "$SERVER_PROPS_PATH" ]]; then
+    printf "  server.properties: %s %b(found)%b\n" "$SERVER_PROPS_PATH" "${GREEN}" "${NC}"
+  else
+    printf "  server.properties: %s %b(NOT found)%b\n" "$SERVER_PROPS_PATH" "${YELLOW}" "${NC}"
   fi
-elif command -v dpkg &>/dev/null; then
-  if dpkg -l 2>/dev/null | grep -q confluent-server; then
-    pass "Confluent Server detected (commercial features available)"
-    kafka_package_found=1
-  elif dpkg -l 2>/dev/null | grep -q confluent-kafka; then
-    info "Apache Kafka (Confluent distribution) detected"
-    kafka_package_found=1
-  fi
+else
+  printf "  server.properties: %bnot detected%b\n" "${YELLOW}" "${NC}"
 fi
 
-if ((kafka_package_found == 0)); then
-  # Check for archive installation
-  if [[ -d "$CONFLUENT_HOME" ]]; then
-    info "Archive installation detected at $CONFLUENT_HOME"
-  else
-    warn "Kafka installation not detected (check CONFLUENT_HOME path)"
+# Detect package/version based on installation type
+if [[ "$INSTALL_TYPE" == "rpm" ]]; then
+  printf "\nPackage Information (RPM/DEB):\n"
+  
+  package_found=0
+  if command -v rpm &>/dev/null; then
+    if rpm -q confluent-server &>/dev/null 2>&1; then
+      pass "Confluent Server (commercial) installed via RPM"
+      confluent_version=$(rpm -q confluent-server --queryformat '%{VERSION}' 2>/dev/null || echo "unknown")
+      printf "  Package: confluent-server\n"
+      printf "  Version: %s\n" "$confluent_version"
+      package_found=1
+    elif rpm -q confluent-kafka &>/dev/null 2>&1; then
+      info "Apache Kafka (Confluent distribution) installed via RPM"
+      kafka_version=$(rpm -q confluent-kafka --queryformat '%{VERSION}' 2>/dev/null || echo "unknown")
+      printf "  Package: confluent-kafka\n"
+      printf "  Version: %s\n" "$kafka_version"
+      package_found=1
+    elif rpm -q confluent-community-kafka &>/dev/null 2>&1; then
+      info "Confluent Community Kafka installed via RPM"
+      kafka_version=$(rpm -q confluent-community-kafka --queryformat '%{VERSION}' 2>/dev/null || echo "unknown")
+      printf "  Package: confluent-community-kafka\n"
+      printf "  Version: %s\n" "$kafka_version"
+      package_found=1
+    fi
+  elif command -v dpkg &>/dev/null; then
+    if dpkg -l confluent-server 2>/dev/null | grep -q ^ii; then
+      pass "Confluent Server (commercial) installed via DEB"
+      confluent_version=$(dpkg -l confluent-server 2>/dev/null | grep ^ii | awk '{print $3}')
+      printf "  Package: confluent-server\n"
+      printf "  Version: %s\n" "$confluent_version"
+      package_found=1
+    elif dpkg -l confluent-kafka 2>/dev/null | grep -q ^ii; then
+      info "Apache Kafka (Confluent distribution) installed via DEB"
+      kafka_version=$(dpkg -l confluent-kafka 2>/dev/null | grep ^ii | awk '{print $3}')
+      printf "  Package: confluent-kafka\n"
+      printf "  Version: %s\n" "$kafka_version"
+      package_found=1
+    elif dpkg -l confluent-community-kafka 2>/dev/null | grep -q ^ii; then
+      info "Confluent Community Kafka installed via DEB"
+      kafka_version=$(dpkg -l confluent-community-kafka 2>/dev/null | grep ^ii | awk '{print $3}')
+      printf "  Package: confluent-community-kafka\n"
+      printf "  Version: %s\n" "$kafka_version"
+      package_found=1
+    fi
   fi
+  
+  if ((package_found == 0)); then
+    warn "Package manager detected RPM structure but no Confluent packages found"
+    info "  Files may remain from uninstalled package or manual installation"
+  fi
+  
+  # Standard RPM paths
+  printf "\nStandard RPM Paths:\n"
+  printf "  Binaries    : /usr/bin\n"
+  printf "  Libraries   : /usr/share/java/kafka\n"
+  printf "  Config      : /etc/kafka\n"
+  printf "  Logs        : /var/log/kafka\n"
+  printf "  Data        : /var/lib/kafka\n"
+  printf "  Systemd Unit: /usr/lib/systemd/system/confluent-*.service\n"
+
+elif [[ "$INSTALL_TYPE" == "archive" ]]; then
+  info "Archive (tarball) installation detected"
+  printf "\nArchive Installation:\n"
+  
+  if [[ -d "$KAFKA_HOME" ]]; then
+    printf "  Base Directory: %s %b(exists)%b\n" "$KAFKA_HOME" "${GREEN}" "${NC}"
+    
+    # Check for key subdirectories
+    for subdir in bin lib etc config logs; do
+      if [[ -d "$KAFKA_HOME/$subdir" ]]; then
+        printf "  ├── /%s %b(exists)%b\n" "$subdir" "${GREEN}" "${NC}"
+      else
+        printf "  ├── /%s %b(missing)%b\n" "$subdir" "${YELLOW}" "${NC}"
+      fi
+    done
+  else
+    warn "Base directory not found: $KAFKA_HOME"
+  fi
+  
+  # Try to detect version from archive
+  if [[ -f "$KAFKA_HOME/share/doc/kafka/NOTICE" ]]; then
+    version=$(grep -oP 'Kafka \K[\d.]+' "$KAFKA_HOME/share/doc/kafka/NOTICE" 2>/dev/null | head -1 || echo "")
+    if [[ -n "$version" ]]; then
+      printf "  Detected Version: %s\n" "$version"
+    fi
+  elif [[ -f "$KAFKA_HOME/bin/kafka-server-start" ]]; then
+    # For older archives, try to get version from script
+    info "  Archive installation confirmed (version detection limited)"
+  fi
+
+else
+  warn "Installation type unknown - manual verification required"
+  info "  Set environment variables to override detection:"
+  info "    CONFLUENT_HOME_OVERRIDE=/path/to/kafka"
+  info "    SERVICE_USER_OVERRIDE=username"
+  info "    SERVER_PROPS_OVERRIDE=/path/to/server.properties"
 fi
 
 # =============================================================================
@@ -979,14 +1307,14 @@ if pgrep -f "kafka\.Kafka" >/dev/null 2>&1; then
   pass "Kafka broker process is running"
   
   # Get process info
-  kafka_pid=$(pgrep -f "kafka\.Kafka" | head -n1)
+  kafka_pid=$(pgrep -f "kafka\.Kafka" 2>/dev/null | head -n1 || echo "")
   if [[ -n "$kafka_pid" ]]; then
     printf "  PID: %s\n" "$kafka_pid"
     
     # Get JVM heap size if possible
     if [[ -r "/proc/$kafka_pid/cmdline" ]]; then
-      heap_xmx=$(tr '\0' '\n' < "/proc/$kafka_pid/cmdline" | grep -oP '^-Xmx\K.*' | head -n1)
-      heap_xms=$(tr '\0' '\n' < "/proc/$kafka_pid/cmdline" | grep -oP '^-Xms\K.*' | head -n1)
+      heap_xmx=$(tr '\0' '\n' < "/proc/$kafka_pid/cmdline" | grep -oP '^-Xmx\K.*' | head -n1 || echo "")
+      heap_xms=$(tr '\0' '\n' < "/proc/$kafka_pid/cmdline" | grep -oP '^-Xms\K.*' | head -n1 || echo "")
       
       if [[ -n "$heap_xmx" ]]; then
         printf "  Heap Max (Xmx): %s\n" "$heap_xmx"
@@ -1030,7 +1358,7 @@ if pgrep -f "kafka\.Kafka" >/dev/null 2>&1; then
       fi
       
       # Get GC settings
-      gc_type=$(tr '\0' '\n' < "/proc/$kafka_pid/cmdline" | grep -oP '^-XX:\+Use\K.*GC' | head -n1)
+      gc_type=$(tr '\0' '\n' < "/proc/$kafka_pid/cmdline" | grep -oP '^-XX:\+Use\K.*GC' | head -n1 || echo "")
       if [[ -n "$gc_type" ]]; then
         printf "  GC Type: %s\n" "$gc_type"
         if [[ "$gc_type" == "G1GC" ]]; then
