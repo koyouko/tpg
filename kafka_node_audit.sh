@@ -1525,13 +1525,16 @@ if ((is_poweredge == 1)) && [[ "$virt_kind" == "physical" ]]; then
   echo ""
   info "Checking Dell PERC RAID configuration..."
   
-  if command -v idracadm7 &>/dev/null; then
-    if sudo -n idracadm7 help &>/dev/null 2>&1; then
+  # Dell idracadm7 is installed at specific path
+  IDRACADM7_PATH="/opt/dell/srvadmin/bin/idracadm7"
+  
+  if [[ -x "$IDRACADM7_PATH" ]]; then
+    if sudo -n "$IDRACADM7_PATH" help &>/dev/null 2>&1; then
       
       # Get RAID controller status
       echo ""
       printf "PERC RAID Controller Status:\n"
-      raid_status=$(sudo idracadm7 storage get status 2>/dev/null || echo "")
+      raid_status=$(sudo "$IDRACADM7_PATH" storage get status 2>/dev/null || echo "")
       if [[ -n "$raid_status" ]]; then
         echo "$raid_status" | grep -E "Controller|Status" | sed 's/^/  /'
       else
@@ -1541,7 +1544,7 @@ if ((is_poweredge == 1)) && [[ "$virt_kind" == "physical" ]]; then
       # Get virtual disk information
       echo ""
       printf "Virtual Disks (RAID Arrays):\n"
-      vdisk_output=$(sudo idracadm7 storage get vdisks 2>/dev/null || echo "")
+      vdisk_output=$(sudo "$IDRACADM7_PATH" storage get vdisks 2>/dev/null || echo "")
       if [[ -n "$vdisk_output" ]]; then
         # Parse and display virtual disks
         echo "$vdisk_output" | grep -A 20 "^Disk.Name" | head -30 | sed 's/^/  /'
@@ -1576,7 +1579,7 @@ if ((is_poweredge == 1)) && [[ "$virt_kind" == "physical" ]]; then
       # Get physical disk information
       echo ""
       printf "Physical Disks:\n"
-      pdisk_output=$(sudo idracadm7 storage get pdisks -o -p State,Size,MediaType 2>/dev/null || echo "")
+      pdisk_output=$(sudo "$IDRACADM7_PATH" storage get pdisks -o -p State,Size,MediaType 2>/dev/null || echo "")
       if [[ -n "$pdisk_output" ]]; then
         # Count physical disks
         pdisk_count=$(echo "$pdisk_output" | grep -c "State=" || echo "0")
@@ -1599,11 +1602,14 @@ if ((is_poweredge == 1)) && [[ "$virt_kind" == "physical" ]]; then
       
     else
       warn "idracadm7 found but sudo access not available"
-      info "  For hardware RAID inspection, grant NOPASSWD sudo access for: idracadm7"
+      info "  For hardware RAID inspection, grant NOPASSWD sudo access for:"
+      info "    $IDRACADM7_PATH"
     fi
   else
-    info "idracadm7 not installed (Dell OpenManage required for hardware RAID inspection)"
+    info "idracadm7 not found at $IDRACADM7_PATH"
+    info "  Dell OpenManage required for hardware RAID inspection"
     info "  Install: yum install srvadmin-idracadm7"
+    info "  Expected path: $IDRACADM7_PATH"
   fi
 fi
 
