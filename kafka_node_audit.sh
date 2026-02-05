@@ -1433,6 +1433,340 @@ else
 fi
 
 # =============================================================================
+# STORAGE RAID CONFIGURATION
+# =============================================================================
+section "STORAGE RAID CONFIGURATION"
+
+# Detect hardware vendor/model
+hw_vendor="unknown"
+hw_model="unknown"
+is_poweredge=0
+
+if [[ -r /sys/class/dmi/id/sys_vendor ]]; then
+  hw_vendor=$(cat /sys/class/dmi/id/sys_vendor 2>/dev/null | tr -d '\n')
+fi
+
+if [[ -r /sys/class/dmi/id/product_name ]]; then
+  hw_model=$(cat /sys/class/dmi/id/product_name 2>/dev/null | tr -d '\n')
+fi
+
+printf "Hardware: %s %s\n" "$hw_vendor" "$hw_model"
+
+# Check if this is a Dell PowerEdge R640
+if [[ "$hw_vendor" =~ Dell ]] && [[ "$hw_model" =~ PowerEdge ]]; then
+  is_poweredge=1
+  info "Dell PowerEdge server detected"
+fi
+
+# Function to check if a device uses LVM
+check_lvm() {
+  local device="$1"
+  if command -v lvs &>/dev/null; then
+    if lvs "$device" &>/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# Function to get RAID info for a mount point
+get_raid_info() {
+  local mount_point="$1"
+  local device=""
+  local raid_type="none"
+  local raid_level=""
+  
+  # Get the device for this mount point
+  device=$(df "$mount_point" 2>/dev/null | tail -n1 | awk '{print $1}')
+  
+  if [[ -z "$device" ]]; then
+    echo "unknown|none|"
+    return
+  fi
+  
+  # Extract base device name (remove partition numbers and /dev/mapper/)
+  local base_device="${device##*/}"
+  base_device="${base_device%%[0-9]*}"
+  
+  # Check if it's an LVM device
+  if [[ "$device" =~ /dev/mapper/ ]] || [[ "$device" =~ /dev/.*-.*/.* ]]; then
+    if check_lvm "$device"; then
+      # Check if LVM is on top of MD RAID
+      local pv_device=$(pvs --noheadings -o pv_name "$device" 2>/dev/null | tr -d ' ' | head -n1)
+      if [[ "$pv_device" =~ /dev/md ]]; then
+        raid_type="lvm+mdraid"
+        local md_dev="${pv_device##*/}"
+        raid_level=$(mdadm --detail "/dev/$md_dev" 2>/dev/null | grep -i "raid level" | awk '{print $NF}' || echo "")
+      else
+        raid_type="lvm"
+      fi
+    else
+      raid_type="lvm"
+    fi
+  # Check if it's MD RAID
+  elif [[ "$device" =~ /dev/md ]]; then
+    raid_type="mdraid"
+    local md_dev="${device##*/}"
+    raid_level=$(mdadm --detail "$device" 2>/dev/null | grep -i "raid level" | awk '{print $NF}' || echo "")
+  # Check if the base device is part of MD RAID
+  elif [[ -e "/sys/block/$base_device/md" ]]; then
+    raid_type="mdraid"
+    raid_level=$(cat "/sys/block/$base_device/md/level" 2>/dev/null || echo "")
+  # Otherwise might be hardware RAID
+  else
+    raid_type="hardware"
+  fi
+  
+  echo "$device|$raid_type|$raid_level"
+}
+
+# Dell PowerEdge: Check physical RAID using idracadm7
+if ((is_poweredge == 1)) && [[ "$virt_kind" == "physical" ]]; then
+  echo ""
+  info "Checking Dell PERC RAID configuration..."
+  
+  if command -v idracadm7 &>/dev/null; then
+    if sudo -n idracadm7 help &>/dev/null 2>&1; then
+      
+      # Get RAID controller status
+      echo ""
+      printf "PERC RAID Controller Status:\n"
+      raid_status=$(sudo idracadm7 storage get status 2>/dev/null || echo "")
+      if [[ -n "$raid_status" ]]; then
+        echo "$raid_status" | grep -E "Controller|Status" | sed 's/^/  /'
+      else
+        info "  Unable to retrieve RAID controller status"
+      fi
+      
+      # Get virtual disk information
+      echo ""
+      printf "Virtual Disks (RAID Arrays):\n"
+      vdisk_output=$(sudo idracadm7 storage get vdisks 2>/dev/null || echo "")
+      if [[ -n "$vdisk_output" ]]; then
+        # Parse and display virtual disks
+        echo "$vdisk_output" | grep -A 20 "^Disk.Name" | head -30 | sed 's/^/  /'
+        
+        # Count virtual disks and check RAID levels
+        vdisk_count=$(echo "$vdisk_output" | grep -c "^Disk.Name" || echo "0")
+        if ((vdisk_count > 0)); then
+          pass "  Found $vdisk_count virtual disk(s) configured"
+          
+          # Extract RAID levels
+          raid_levels=$(echo "$vdisk_output" | grep "RAIDTypes" | awk '{print $NF}' | sort -u)
+          if [[ -n "$raid_levels" ]]; then
+            printf "  RAID Levels configured: %s\n" "$raid_levels"
+            
+            # Check if RAID 10 or RAID 5/6 is used (recommended for Kafka)
+            if echo "$raid_levels" | grep -qE "RAID-10|RAID-6"; then
+              pass "  RAID-10 or RAID-6 detected (excellent for Kafka)"
+            elif echo "$raid_levels" | grep -q "RAID-5"; then
+              info "  RAID-5 detected (acceptable, RAID-10 preferred for Kafka write performance)"
+            elif echo "$raid_levels" | grep -q "RAID-1"; then
+              info "  RAID-1 detected (acceptable for redundancy, limited capacity)"
+            elif echo "$raid_levels" | grep -q "RAID-0"; then
+              warn "  RAID-0 detected (NO redundancy - data loss risk!)"
+              info "    Recommendation: Use RAID-10 or RAID-6 for production Kafka"
+            fi
+          fi
+        fi
+      else
+        warn "  Unable to retrieve virtual disk information"
+      fi
+      
+      # Get physical disk information
+      echo ""
+      printf "Physical Disks:\n"
+      pdisk_output=$(sudo idracadm7 storage get pdisks -o -p State,Size,MediaType 2>/dev/null || echo "")
+      if [[ -n "$pdisk_output" ]]; then
+        # Count physical disks
+        pdisk_count=$(echo "$pdisk_output" | grep -c "State=" || echo "0")
+        if ((pdisk_count > 0)); then
+          info "  Found $pdisk_count physical disk(s)"
+          
+          # Show physical disk summary
+          echo "$pdisk_output" | grep -E "State=|Size=|MediaType=" | head -20 | sed 's/^/  /'
+          
+          # Check for SSD vs HDD
+          if echo "$pdisk_output" | grep -qi "SSD"; then
+            pass "  SSD drives detected (excellent for Kafka)"
+          elif echo "$pdisk_output" | grep -qi "HDD"; then
+            info "  HDD drives detected (consider SSD for better performance)"
+          fi
+        fi
+      else
+        warn "  Unable to retrieve physical disk information"
+      fi
+      
+    else
+      warn "idracadm7 found but sudo access not available"
+      info "  For hardware RAID inspection, grant NOPASSWD sudo access for: idracadm7"
+    fi
+  else
+    info "idracadm7 not installed (Dell OpenManage required for hardware RAID inspection)"
+    info "  Install: yum install srvadmin-idracadm7"
+  fi
+fi
+
+# Software RAID detection (MD RAID) - for all systems
+echo ""
+info "Checking software RAID (MD RAID) configuration..."
+
+if [[ -r /proc/mdstat ]]; then
+  mdstat_content=$(cat /proc/mdstat 2>/dev/null)
+  
+  if echo "$mdstat_content" | grep -q "^md"; then
+    echo ""
+    printf "Software RAID Arrays:\n"
+    echo "$mdstat_content" | sed 's/^/  /'
+    
+    # Parse MD arrays
+    md_arrays=$(echo "$mdstat_content" | grep "^md" | awk '{print $1}')
+    for md_array in $md_arrays; do
+      echo ""
+      info "Array: /dev/$md_array"
+      
+      if command -v mdadm &>/dev/null; then
+        # Get detailed array information
+        array_detail=$(sudo mdadm --detail "/dev/$md_array" 2>/dev/null || echo "")
+        
+        if [[ -n "$array_detail" ]]; then
+          # Extract key information
+          raid_level=$(echo "$array_detail" | grep "Raid Level" | awk '{print $NF}')
+          array_size=$(echo "$array_detail" | grep "Array Size" | awk '{print $4, $5}')
+          num_devices=$(echo "$array_detail" | grep "Total Devices" | awk '{print $NF}')
+          array_state=$(echo "$array_detail" | grep "State" | awk '{print $NF}')
+          
+          printf "  RAID Level: %s\n" "${raid_level:-unknown}"
+          printf "  Array Size: %s\n" "${array_size:-unknown}"
+          printf "  Devices: %s\n" "${num_devices:-unknown}"
+          printf "  State: %s\n" "${array_state:-unknown}"
+          
+          # Recommendations based on RAID level
+          case "$raid_level" in
+            raid10)
+              pass "  RAID-10 (excellent for Kafka - best balance of performance and redundancy)"
+              ;;
+            raid6)
+              pass "  RAID-6 (good for Kafka - dual parity, handles 2 disk failures)"
+              ;;
+            raid5)
+              info "  RAID-5 (acceptable, RAID-10 preferred for better write performance)"
+              ;;
+            raid1)
+              info "  RAID-1 (acceptable for redundancy, but limited capacity efficiency)"
+              ;;
+            raid0)
+              warn "  RAID-0 (NO redundancy - not recommended for production Kafka)"
+              info "    Recommendation: Use RAID-10 for production Kafka data"
+              ;;
+          esac
+        else
+          info "  Run 'sudo mdadm --detail /dev/$md_array' for more information"
+        fi
+      else
+        info "  mdadm not installed - install for detailed RAID information"
+      fi
+    done
+    
+  else
+    info "No software RAID (MD) arrays configured"
+  fi
+else
+  info "/proc/mdstat not available"
+fi
+
+# LVM detection
+echo ""
+info "Checking LVM configuration..."
+
+if command -v lvs &>/dev/null; then
+  lv_list=$(sudo lvs --noheadings 2>/dev/null | awk '{print $1, $2}' || echo "")
+  
+  if [[ -n "$lv_list" ]]; then
+    echo ""
+    printf "Logical Volumes:\n"
+    sudo lvs 2>/dev/null | sed 's/^/  /' || echo "  Unable to list LVs (sudo required)"
+    
+    # Check if LVs are on top of RAID
+    echo ""
+    info "Checking if LVs are backed by RAID..."
+    while read -r lv vg; do
+      [[ -z "$lv" ]] && continue
+      pv_devices=$(sudo pvs --noheadings -o pv_name -S "vg_name=$vg" 2>/dev/null | tr -d ' ')
+      
+      for pv in $pv_devices; do
+        if [[ "$pv" =~ /dev/md ]]; then
+          pass "  LV '$lv' in VG '$vg' is backed by software RAID ($pv)"
+        fi
+      done
+    done <<<"$lv_list"
+  else
+    info "No LVM logical volumes found"
+  fi
+else
+  info "LVM tools not installed"
+fi
+
+# Check RAID configuration for Kafka data directories
+if [[ -n "${logdirs:-}" ]]; then
+  echo ""
+  info "Checking RAID configuration for Kafka data directories..."
+  
+  IFS=',' read -r -a log_dirs <<<"$logdirs"
+  for dir in "${log_dirs[@]}"; do
+    dir=$(echo "$dir" | tr -d ' ')
+    
+    if [[ -d "$dir" ]]; then
+      echo ""
+      printf "Directory: %s\n" "$dir"
+      
+      # Get RAID info for this directory
+      IFS='|' read -r device raid_type raid_level < <(get_raid_info "$dir")
+      
+      printf "  Device: %s\n" "$device"
+      printf "  Storage Type: %s\n" "$raid_type"
+      
+      if [[ "$raid_type" == "mdraid" ]] || [[ "$raid_type" == "lvm+mdraid" ]]; then
+        if [[ -n "$raid_level" ]]; then
+          printf "  RAID Level: %s\n" "$raid_level"
+          
+          case "$raid_level" in
+            raid10)
+              pass "  Using RAID-10 (optimal for Kafka)"
+              ;;
+            raid6)
+              pass "  Using RAID-6 (good for Kafka)"
+              ;;
+            raid5)
+              info "  Using RAID-5 (acceptable, RAID-10 recommended)"
+              ;;
+            raid1)
+              info "  Using RAID-1 (acceptable for small deployments)"
+              ;;
+            raid0)
+              warn "  Using RAID-0 (no redundancy!)"
+              ;;
+          esac
+        else
+          info "  RAID level could not be determined"
+        fi
+      elif [[ "$raid_type" == "hardware" ]]; then
+        info "  Appears to be hardware RAID (check controller status above)"
+      elif [[ "$raid_type" == "lvm" ]]; then
+        info "  Using LVM (check if backed by RAID)"
+      else
+        if [[ "$virt_kind" == "vm" ]]; then
+          info "  Storage Type: Virtual disk (RAID managed by hypervisor/storage)"
+        else
+          warn "  No RAID detected - single disk may be a single point of failure"
+          info "    Recommendation: Use RAID-10 or RAID-6 for production Kafka"
+        fi
+      fi
+    fi
+  done
+fi
+
+# =============================================================================
 # DISK CONFIGURATION
 # =============================================================================
 section "DISK CONFIGURATION"
