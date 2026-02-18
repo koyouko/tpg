@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <springProfile name="DEV | SIT | UAT | UAT2 | PTE | COB | PROD">
+        <property name="LOG_DIR" value="/cm-microservices/logs" />
+    </springProfile>
+
+    <springProfile name="!DEV &amp; !SIT &amp; !UAT &amp; !UAT2 &amp; !PTE &amp; !COB &amp; !PROD">
+        <property name="LOG_DIR" value="c:/logs" />
+    </springProfile>
+
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="xxxxxxxxx">
+                <pattern>
+                    %d{dd-MM-yyyy HH:mm:ss.SSS} %magenta([%thread])
+                    %highlight(%-5level) %logger.%M
+                    - %msg%n
+                </pattern>
+            </layout>
+        </encoder>
+    </appender>
+
+    <appender name="SAVE-TO-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_DIR}/base-b-kafka-gateway.log</file>
+        <encoder class="ch.qos.logback.core.encoder.LayoutWrappingEncoder">
+            <layout class="xxxxxx">
+                <Pattern>
+                    %d{dd-MM-yyyy HH:mm:ss.SSS} [%thread] %-5level
+                    %logger{36}.%M - %msg%n
+                </Pattern>
+            </layout>
+        </encoder>
+
+        <rollingPolicy class="xxxxxxx">
+            <fileNamePattern>
+                ${LOG_DIR}/archived/base-b-kafka-gateway.log.%d{dd-MM-yyyy}.log
+            </fileNamePattern>
+            <maxHistory>10</maxHistory>
+            <totalSizeCap>100MB</totalSizeCap>
+        </rollingPolicy>
+
+        <rollingPolicy class="xxxxx">
+            <fileNamePattern>
+                ${LOG_DIR}/base-b-kafka-gateway.log_%i.log
+            </fileNamePattern>
+            <minIndex>2</minIndex>
+            <maxIndex>5</maxIndex>
+        </rollingPolicy>
+
+        <triggeringPolicy class="ch.qos.logback.core.rolling.SizeBasedTriggeringPolicy">
+            <maxFileSize>100MB</maxFileSize>
+        </triggeringPolicy>
+    </appender>
+
+    <!-- ============================================================ -->
+    <!-- KAFKA CLIENT 4.0 LOGGING - Full stack trace enabled          -->
+    <!-- ============================================================ -->
+
+    <!-- Top-level Kafka logger (catches everything below) -->
+    <logger name="org.apache.kafka" level="DEBUG" additivity="false">
+        <appender-ref ref="STDOUT" />
+        <appender-ref ref="SAVE-TO-FILE" />
+    </logger>
+
+    <!-- Producer internals: batching, retries, acks, metadata -->
+    <logger name="org.apache.kafka.clients.producer" level="DEBUG" additivity="false">
+        <appender-ref ref="STDOUT" />
+        <appender-ref ref="SAVE-TO-FILE" />
+    </logger>
+
+    <!-- Consumer internals: poll loop, offset commits, rebalance -->
+    <logger name="org.apache.kafka.clients.consumer" level="DEBUG" additivity="false">
+        <appender-ref ref="STDOUT" />
+        <appender-ref ref="SAVE-TO-FILE" />
+    </logger>
+
+    <!-- Network layer: broker connections, SSL handshake, disconnects -->
+    <logger name="org.apache.kafka.clients.NetworkClient" level="DEBUG" additivity="false">
+        <appender-ref ref="STDOUT" />
+        <appender-ref ref="SAVE-TO-FILE" />
+    </logger>
+
+    <!-- Admin client: topic creation, metadata fetch -->
+    <logger name="org.apache.kafka.clients.admin" level="DEBUG" additivity="false">
+        <appender-ref ref="STDOUT" />
+        <appender-ref ref="SAVE-TO-FILE" />
+    </logger>
+
+    <!-- KRaft / Kafka 4.0 coordinator (replaces ZooKeeper) -->
+    <logger name="org.apache.kafka.coordinator" level="DEBUG" additivity="false">
+        <appender-ref ref="STDOUT" />
+        <appender-ref ref="SAVE-TO-FILE" />
+    </logger>
+
+    <!-- Common utilities: serialization, metrics -->
+    <logger name="org.apache.kafka.common" level="DEBUG" additivity="false">
+        <appender-ref ref="STDOUT" />
+        <appender-ref ref="SAVE-TO-FILE" />
+    </logger>
+
+    <!-- Spring Kafka wrapper (listener container, error handlers) -->
+    <logger name="org.springframework.kafka" level="DEBUG" additivity="false">
+        <appender-ref ref="STDOUT" />
+        <appender-ref ref="SAVE-TO-FILE" />
+    </logger>
+
+    <!-- ============================================================ -->
+    <!-- ROOT LOGGER - changed from OFF to INFO                       -->
+    <!-- ============================================================ -->
+    <root level="INFO">
+        <appender-ref ref="STDOUT" />
+        <appender-ref ref="SAVE-TO-FILE" />
+    </root>
+
+</configuration>
