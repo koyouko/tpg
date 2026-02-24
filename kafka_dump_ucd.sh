@@ -685,16 +685,25 @@ HTMLEOF
     email_body="${email_body//__UPLOAD_URL__/$UPLOAD_URL}"
     email_body="${email_body//__TIMESTAMP__/$timestamp}"
 
-    # Build mailx arguments
-    local -a mail_args=()
-    mail_args+=(-s "$subject")
-    mail_args+=(-S "content-type=text/html; charset=utf-8")
+    # Use sendmail directly so MIME headers are guaranteed
+    local sender
+    sender="$(whoami)@$(hostname -f)"
 
+    local cc_header=""
     if [[ -n "$cc_addr" ]]; then
-        mail_args+=(-c "$cc_addr")
+        cc_header="Cc: ${cc_addr}"
     fi
 
-    if printf '%s' "$email_body" | mailx "${mail_args[@]}" "$to_addr" 2>> "$LOG_FILE"; then
+    if {
+        printf 'From: %s\n' "$sender"
+        printf 'To: %s\n' "$to_addr"
+        [[ -n "$cc_header" ]] && printf '%s\n' "$cc_header"
+        printf 'Subject: %s\n' "$subject"
+        printf 'MIME-Version: 1.0\n'
+        printf 'Content-Type: text/html; charset=utf-8\n'
+        printf '\n'
+        printf '%s' "$email_body"
+    } | /usr/sbin/sendmail -t 2>> "$LOG_FILE"; then
         log INFO "Notification email sent to $to_addr (cc: ${cc_addr:-none})"
     else
         log WARN "Failed to send notification email (non-fatal)"
