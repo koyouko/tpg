@@ -26,7 +26,7 @@ if [[ "$BOOTSTRAP_SERVERS" == "$CURRENT_HOST" ]]; then
     chown stekafka:stekafka /home/stekafka/scripts/*
     chmod 755 /home/stekafka/scripts/*
 
-    # Call the script with named parameters – no exports needed
+    # Call the script with named parameters
     bash /home/stekafka/scripts/stp_kafka_dump.sh \
         --inc               "${p:INC_NUMBER}" \
         --req               "${p:REQ_NUMBER}" \
