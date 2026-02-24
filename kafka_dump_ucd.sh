@@ -686,8 +686,7 @@ HTMLEOF
     email_body="${email_body//__TIMESTAMP__/$timestamp}"
 
     # Use sendmail directly so MIME headers are guaranteed
-    local sender
-    sender="$(whoami)@$(hostname -f)"
+    local sender="dl.icg.global.kafka.ste.admin@imcnam.ssmb.com"
 
     local cc_header=""
     if [[ -n "$cc_addr" ]]; then
