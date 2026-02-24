@@ -20,7 +20,7 @@ if [[ "$BOOTSTRAP_SERVERS" == "$CURRENT_HOST" ]]; then
 
     # Download latest script from Artifactory
     curl -k -s \
-        -H "X-JFrog-Art-Api:AKCp8krlJxn2hjiWHo1LnFZmKdTDMfpTFrvmCjtJEYbrWTULx3GgWTz1lRwlqE1xEkRiknz6v" \
+        -H "X-JFrog-Art-Api:" \
         -O "https://www.artifactrepository.citigroup.net:443/artifactory/generic-icg-dev-local/tts-stpemp-kafka/stp_kafka_dump.sh"
 
     chown stekafka:stekafka /home/stekafka/scripts/*
