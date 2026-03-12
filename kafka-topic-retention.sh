@@ -3,11 +3,22 @@ set -euo pipefail
 
 # =============================================================================
 # Kafka STP — Topic Retention Update (1..7 days only)
-# - Uses kafka-configs to set retention.ms
-# - Uses kafka-topics to capture before/after describe
-# - mTLS via --command-config (AdminClient properties)
-# - Audit JSONL log under /var/log/confluent/kafka-topic-retention/audit.jsonl
-# - Outlook-styled HTML email via sendmail
+#
+# Features
+# - Uses kafka-configs to set topic retention.ms
+# - Accepts retention input as either days or milliseconds
+# - Enforces allowed range: minimum 1 day, maximum 7 days
+# - Uses mTLS via --command-config AdminClient properties
+# - Captures before/after retention and topic describe output
+# - Writes one-line JSON audit records
+# - Sends Outlook-friendly HTML email via sendmail on success or failure
+#
+# Binaries:
+#   /opt/confluent/latest/bin/kafka-configs(.sh)
+#   /opt/confluent/latest/bin/kafka-topics(.sh)
+#
+# Default AdminClient properties:
+#   /home/stekafka/config/stekafka_client.properties
 # =============================================================================
 
 BIN_DIR="/opt/confluent/latest/bin"
@@ -25,6 +36,7 @@ AUDIT_FILE="${LOG_BASE}/audit.jsonl"
 
 SENDMAIL_BIN="/usr/sbin/sendmail"
 
+MAIL_DOMAIN="citi.com"
 DEFAULT_MAIL_FROM="dl.icg.global.kafka.ste.admin@imcnam.ssmb.com"
 DEFAULT_CC_ADDR="dl.icg.global.kafka.ste.admin@imcnam.ssmb.com"
 
@@ -47,16 +59,20 @@ Defaults:
   --command-config ${DEFAULT_CMD_CONFIG}
   --mail-from      ${DEFAULT_MAIL_FROM}
   --cc             ${DEFAULT_CC_ADDR}
-  Audit log:       ${AUDIT_FILE}
+  mail domain      ${MAIL_DOMAIN}
+  audit log        ${AUDIT_FILE}
 
 Notes:
-  - This script enforces retention range: 1..7 days (or equivalent ms).
-  - Email recipient is passed as the SoEID only; default domain resolution is expected
-    to be handled by the RHEL/sendmail/Postfix configuration.
+  - Kafka applies topic retention using retention.ms
+  - Exactly one of --days or --ms must be supplied
+  - --days is converted internally to milliseconds
+  - Email is always sent to <soeid>@${MAIL_DOMAIN}
 EOF
 }
 
-now_iso() { date -u +"%Y-%m-%dT%H:%M:%SZ"; }
+now_iso() {
+  date -u +"%Y-%m-%dT%H:%M:%SZ"
+}
 
 ensure_log_dir() {
   if [[ ! -d "$LOG_BASE" ]]; then
@@ -65,6 +81,7 @@ ensure_log_dir() {
       exit 2
     }
   fi
+
   touch "$AUDIT_FILE" 2>/dev/null || {
     echo "ERROR: Cannot write to $AUDIT_FILE. Fix permissions." >&2
     exit 2
@@ -76,6 +93,7 @@ require_bins() {
     echo "ERROR: kafka-configs not found/executable at ${BIN_DIR}/kafka-configs(.sh)" >&2
     exit 2
   fi
+
   if [[ ! -x "$KAFKA_TOPICS" ]]; then
     echo "ERROR: kafka-topics not found/executable at ${BIN_DIR}/kafka-topics(.sh)" >&2
     exit 2
@@ -120,7 +138,12 @@ get_current_retention_ms() {
 
   local val
   val="$(printf '%s\n' "$out" | grep -Eo 'retention\.ms=[0-9]+' | head -n1 | cut -d= -f2 || true)"
-  [[ -z "$val" ]] && echo "NOT_SET" || echo "$val"
+
+  if [[ -z "$val" ]]; then
+    echo "NOT_SET"
+  else
+    echo "$val"
+  fi
 }
 
 describe_topic() {
@@ -139,30 +162,28 @@ describe_topic() {
     echo "ERROR_TOPIC_DESCRIBE::$out"
     return 0
   fi
+
   echo "$out"
 }
 
-# ============================================================================
-# Email Notification (HTML for Outlook)
-# ============================================================================
 send_notification() {
-    local to_addr="$1"
-    local cc_addr="$2"
-    local subject="$3"
-    local status_label="$4"
-    local status_color="$5"
+  local to_addr="$1"
+  local cc_addr="$2"
+  local subject="$3"
+  local status_label="$4"
+  local status_color="$5"
 
-    local timestamp
-    timestamp=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
+  local timestamp
+  timestamp=$(date -u +"%Y-%m-%d %H:%M:%S UTC")
 
-    local desc_before_html desc_after_html err_html
-    desc_before_html="$(printf '%s' "${TOPIC_DESC_BEFORE:-}" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
-    desc_after_html="$(printf '%s' "${TOPIC_DESC_AFTER:-}"  | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
-    err_html="$(printf '%s' "${ERROR_MSG:-}"               | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
-    [[ -z "$err_html" ]] && err_html="N/A"
+  local desc_before_html desc_after_html err_html
+  desc_before_html="$(printf '%s' "${TOPIC_DESC_BEFORE:-}" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+  desc_after_html="$(printf '%s' "${TOPIC_DESC_AFTER:-}"  | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+  err_html="$(printf '%s' "${ERROR_MSG:-}"               | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')"
+  [[ -z "$err_html" ]] && err_html="N/A"
 
-    local email_body
-    read -r -d '' email_body <<'HTMLEOF' || true
+  local email_body
+  read -r -d '' email_body <<'HTMLEOF' || true
 <!DOCTYPE html>
 <html>
 <head>
@@ -299,80 +320,94 @@ send_notification() {
 </html>
 HTMLEOF
 
-    email_body="${email_body//__STATUS_LABEL__/$(printf '%s' "$status_label")}"
-    email_body="${email_body//__STATUS_COLOR__/$(printf '%s' "$status_color")}"
-    email_body="${email_body//__TIMESTAMP__/$(printf '%s' "$timestamp")}"
+  email_body="${email_body//__STATUS_LABEL__/$(printf '%s' "$status_label")}"
+  email_body="${email_body//__STATUS_COLOR__/$(printf '%s' "$status_color")}"
+  email_body="${email_body//__TIMESTAMP__/$(printf '%s' "$timestamp")}"
 
-    email_body="${email_body//__INC__/$(printf '%s' "$(html_escape "${INC:-}")")}"
-    email_body="${email_body//__TOPIC__/$(printf '%s' "$(html_escape "${TOPIC:-}")")}"
-    email_body="${email_body//__BOOTSTRAP__/$(printf '%s' "$(html_escape "${BOOTSTRAP:-}")")}"
-    email_body="${email_body//__SOEID__/$(printf '%s' "$(html_escape "${SOEID:-}")")}"
-    email_body="${email_body//__HOST__/$(printf '%s' "$(html_escape "${HOST:-}")")}"
-    email_body="${email_body//__START_TS__/$(printf '%s' "$(html_escape "${START_TS:-}")")}"
-    email_body="${email_body//__END_TS__/$(printf '%s' "$(html_escape "${END_TS:-}")")}"
-    email_body="${email_body//__MODE__/$(printf '%s' "$(html_escape "${MODE:-}")")}"
-    email_body="${email_body//__REQ_DAYS__/$(printf '%s' "$(html_escape "${REQUESTED_DAYS:-}")")}"
-    email_body="${email_body//__REQ_MS__/$(printf '%s' "$(html_escape "${REQUESTED_MS:-}")")}"
+  email_body="${email_body//__INC__/$(printf '%s' "$(html_escape "${INC:-}")")}"
+  email_body="${email_body//__TOPIC__/$(printf '%s' "$(html_escape "${TOPIC:-}")")}"
+  email_body="${email_body//__BOOTSTRAP__/$(printf '%s' "$(html_escape "${BOOTSTRAP:-}")")}"
+  email_body="${email_body//__SOEID__/$(printf '%s' "$(html_escape "${SOEID:-}")")}"
+  email_body="${email_body//__HOST__/$(printf '%s' "$(html_escape "${HOST:-}")")}"
+  email_body="${email_body//__START_TS__/$(printf '%s' "$(html_escape "${START_TS:-}")")}"
+  email_body="${email_body//__END_TS__/$(printf '%s' "$(html_escape "${END_TS:-}")")}"
+  email_body="${email_body//__MODE__/$(printf '%s' "$(html_escape "${MODE:-}")")}"
+  email_body="${email_body//__REQ_DAYS__/$(printf '%s' "$(html_escape "${REQUESTED_DAYS:-}")")}"
+  email_body="${email_body//__REQ_MS__/$(printf '%s' "$(html_escape "${REQUESTED_MS:-}")")}"
+  email_body="${email_body//__RET_APPLIED__/$(printf '%s' "$(html_escape "${RETENTION_APPLIED:-}")")}"
+  email_body="${email_body//__RET_BEFORE__/$(printf '%s' "$(html_escape "${RETENTION_BEFORE:-}")")}"
+  email_body="${email_body//__RET_AFTER__/$(printf '%s' "$(html_escape "${RETENTION_AFTER:-}")")}"
+  email_body="${email_body//__AUDIT_FILE__/$(printf '%s' "$(html_escape "${AUDIT_FILE:-}")")}"
+  email_body="${email_body//__TOPIC_DESC_BEFORE__/${desc_before_html}}"
+  email_body="${email_body//__TOPIC_DESC_AFTER__/${desc_after_html}}"
+  email_body="${email_body//__ERROR__/${err_html}}"
 
-    email_body="${email_body//__RET_APPLIED__/$(printf '%s' "$(html_escape "${RETENTION_APPLIED:-}")")}"
-    email_body="${email_body//__RET_BEFORE__/$(printf '%s' "$(html_escape "${RETENTION_BEFORE:-}")")}"
-    email_body="${email_body//__RET_AFTER__/$(printf '%s' "$(html_escape "${RETENTION_AFTER:-}")")}"
+  if [[ ! -x "$SENDMAIL_BIN" ]]; then
+    echo "WARN: sendmail not found at $SENDMAIL_BIN; skipping email." >&2
+    return 0
+  fi
 
-    email_body="${email_body//__AUDIT_FILE__/$(printf '%s' "$(html_escape "${AUDIT_FILE:-}")")}"
-    email_body="${email_body//__TOPIC_DESC_BEFORE__/${desc_before_html}}"
-    email_body="${email_body//__TOPIC_DESC_AFTER__/${desc_after_html}}"
-    email_body="${email_body//__ERROR__/${err_html}}"
-
-    if [[ ! -x "$SENDMAIL_BIN" ]]; then
-      echo "WARN: sendmail not found at $SENDMAIL_BIN; skipping email." >&2
-      return 0
-    fi
-
-    {
-        echo "From: ${MAIL_FROM}"
-        echo "To: ${to_addr}"
-        [[ -n "${cc_addr}" ]] && echo "Cc: ${cc_addr}"
-        echo "Subject: ${subject}"
-        echo "MIME-Version: 1.0"
-        echo "Content-Type: text/html; charset=UTF-8"
-        echo "Content-Transfer-Encoding: 8bit"
-        echo
-        printf '%s\n' "$email_body"
-    } | "$SENDMAIL_BIN" -t
+  {
+    echo "From: ${MAIL_FROM}"
+    echo "To: ${to_addr}"
+    [[ -n "${cc_addr}" ]] && echo "Cc: ${cc_addr}"
+    echo "Subject: ${subject}"
+    echo "MIME-Version: 1.0"
+    echo "Content-Type: text/html; charset=UTF-8"
+    echo "Content-Transfer-Encoding: 8bit"
+    echo
+    printf '%s\n' "$email_body"
+  } | "$SENDMAIL_BIN" -t
 }
 
 main() {
-  local inc="" topic="" bootstrap="" soeid=""
-  local days="" ms=""
+  local inc=""
+  local topic=""
+  local bootstrap=""
+  local soeid=""
+  local days=""
+  local ms=""
   local dry_run=0
   local cmdcfg="${DEFAULT_CMD_CONFIG}"
   local mail_from="${DEFAULT_MAIL_FROM}"
   local cc_addr="${DEFAULT_CC_ADDR}"
 
-  if [[ $# -eq 0 ]]; then usage; exit 1; fi
+  if [[ $# -eq 0 ]]; then
+    usage
+    exit 1
+  fi
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --inc) inc="${2:-}"; shift 2;;
-      --topic) topic="${2:-}"; shift 2;;
-      --bootstrap) bootstrap="${2:-}"; shift 2;;
-      --soeid) soeid="${2:-}"; shift 2;;
-      --days) days="${2:-}"; shift 2;;
-      --ms) ms="${2:-}"; shift 2;;
-      --command-config) cmdcfg="${2:-}"; shift 2;;
-      --mail-from) mail_from="${2:-}"; shift 2;;
-      --cc) cc_addr="${2:-}"; shift 2;;
-      --dry-run) dry_run=1; shift;;
-      -h|--help) usage; exit 0;;
-      *) echo "Unknown argument: $1" >&2; usage; exit 1;;
+      --inc) inc="${2:-}"; shift 2 ;;
+      --topic) topic="${2:-}"; shift 2 ;;
+      --bootstrap) bootstrap="${2:-}"; shift 2 ;;
+      --soeid) soeid="${2:-}"; shift 2 ;;
+      --days) days="${2:-}"; shift 2 ;;
+      --ms) ms="${2:-}"; shift 2 ;;
+      --command-config) cmdcfg="${2:-}"; shift 2 ;;
+      --mail-from) mail_from="${2:-}"; shift 2 ;;
+      --cc) cc_addr="${2:-}"; shift 2 ;;
+      --dry-run) dry_run=1; shift ;;
+      -h|--help) usage; exit 0 ;;
+      *)
+        echo "Unknown argument: $1" >&2
+        usage
+        exit 1
+        ;;
     esac
   done
 
   ensure_log_dir
   require_bins
 
-  local start_ts; start_ts="$(now_iso)"
-  local host; host="$(hostname -f 2>/dev/null || hostname)"
+  local start_ts
+  start_ts="$(now_iso)"
+
+  local end_ts=""
+  local host
+  host="$(hostname -f 2>/dev/null || hostname)"
+
   local status="FAIL"
   local error_msg=""
   local requested_mode=""
@@ -381,7 +416,6 @@ main() {
   local after_retention=""
   local before_topic_desc=""
   local after_topic_desc=""
-  local end_ts=""
   local os_user="${SUDO_USER:-${LOGNAME:-unknown}}"
 
   finalize() {
@@ -394,7 +428,7 @@ main() {
     printf '"inc":"%s",' "$(json_escape "$inc")" >> "$AUDIT_FILE"
     printf '"topic":"%s",' "$(json_escape "$topic")" >> "$AUDIT_FILE"
     printf '"bootstrap":"%s",' "$(json_escape "$bootstrap")" >> "$AUDIT_FILE"
-    printf '"command_config":"%s",' "$(json_escape "$cmdfg")" >> "$AUDIT_FILE"
+    printf '"command_config":"%s",' "$(json_escape "$cmdcfg")" >> "$AUDIT_FILE"
     printf '"soe_id":"%s",' "$(json_escape "$soeid")" >> "$AUDIT_FILE"
     printf '"os_user":"%s",' "$(json_escape "$os_user")" >> "$AUDIT_FILE"
     printf '"host":"%s",' "$(json_escape "$host")" >> "$AUDIT_FILE"
@@ -427,7 +461,9 @@ main() {
     ERROR_MSG="${error_msg:-}"
     MAIL_FROM="$mail_from"
 
-    local status_label status_color
+    local status_label
+    local status_color
+
     if [[ "$status" == "SUCCESS" ]]; then
       status_label="SUCCESS"
       status_color="#36B37E"
@@ -436,8 +472,8 @@ main() {
       status_color="#DE350B"
     fi
 
-    local to_addr="${soeid}"
-    local subject="[${status_label}] Kafka Topic Retention Update - ${topic} - ${inc}"
+    local to_addr="${soeid}@${MAIL_DOMAIN}"
+    local subject="[Kafka-STP] ${status_label} - Retention Update - ${topic} - ${inc}"
 
     send_notification "$to_addr" "$cc_addr" "$subject" "$status_label" "$status_color" || true
 
@@ -465,6 +501,7 @@ main() {
     error_msg="command-config not found: $cmdcfg"
     finalize 1
   fi
+
   if [[ ! -r "$cmdcfg" ]]; then
     error_msg="command-config not readable: $cmdcfg"
     finalize 1
