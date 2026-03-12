@@ -7,14 +7,7 @@ set -euo pipefail
 # - Uses kafka-topics to capture before/after describe
 # - mTLS via --command-config (AdminClient properties)
 # - Audit JSONL log under /var/log/confluent/kafka-topic-retention/audit.jsonl
-# - Outlook-styled HTML email via sendmail (same styling as your reference)
-#
-# Binaries:
-#   /opt/confluent/latest/bin/kafka-configs(.sh)
-#   /opt/confluent/latest/bin/kafka-topics(.sh)
-#
-# AdminClient properties (mTLS):
-#   /home/stekafka/config/stekafka_client.properties
+# - Outlook-styled HTML email via sendmail
 # =============================================================================
 
 BIN_DIR="/opt/confluent/latest/bin"
@@ -30,16 +23,16 @@ DEFAULT_CMD_CONFIG="/home/stekafka/config/stekafka_client.properties"
 LOG_BASE="/var/log/confluent/kafka-topic-retention"
 AUDIT_FILE="${LOG_BASE}/audit.jsonl"
 
-# Email defaults (override via args)
-DEFAULT_MAIL_DOMAIN="example.com"
-DEFAULT_MAIL_FROM="kafka-stp@$(hostname -d 2>/dev/null || echo example.com)"
 SENDMAIL_BIN="/usr/sbin/sendmail"
+
+DEFAULT_MAIL_FROM="dl.icg.global.kafka.ste.admin@imcnam.ssmb.com"
+DEFAULT_CC_ADDR="dl.icg.global.kafka.ste.admin@imcnam.ssmb.com"
 
 MIN_DAYS=1
 MAX_DAYS=7
 DAY_MS=86400000
-MIN_MS=$((MIN_DAYS * DAY_MS))        # 86,400,000
-MAX_MS=$((MAX_DAYS * DAY_MS))        # 604,800,000
+MIN_MS=$((MIN_DAYS * DAY_MS))
+MAX_MS=$((MAX_DAYS * DAY_MS))
 
 usage() {
   cat <<EOF
@@ -47,16 +40,19 @@ Usage:
   $(basename "$0") --inc INC12345 --topic <topic> --bootstrap <host:9093[,host:9093...]> --soeid <SoEID> \\
     (--days <1..7> | --ms <86400000..604800000>) \\
     [--command-config /path/to/adminclient.properties] \\
-    [--mail-domain example.com] [--mail-from sender@domain] [--cc addr@domain] \\
+    [--mail-from sender@domain] [--cc addr@domain] \\
     [--dry-run]
 
 Defaults:
   --command-config ${DEFAULT_CMD_CONFIG}
-  Audit log:        ${AUDIT_FILE}
+  --mail-from      ${DEFAULT_MAIL_FROM}
+  --cc             ${DEFAULT_CC_ADDR}
+  Audit log:       ${AUDIT_FILE}
 
 Notes:
   - This script enforces retention range: 1..7 days (or equivalent ms).
-  - Email is sent to: <soeid>@<mail-domain> using sendmail in HTML for Outlook.
+  - Email recipient is passed as the SoEID only; default domain resolution is expected
+    to be handled by the RHEL/sendmail/Postfix configuration.
 EOF
 }
 
@@ -147,7 +143,7 @@ describe_topic() {
 }
 
 # ============================================================================
-# Email Notification (HTML for Outlook) - same styling as your reference
+# Email Notification (HTML for Outlook)
 # ============================================================================
 send_notification() {
     local to_addr="$1"
@@ -180,7 +176,6 @@ send_notification() {
 <tr><td align="center">
 <table role="presentation" width="620" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;border:1px solid #dfe1e6;max-width:620px;width:100%;">
 
-  <!-- Header banner -->
   <tr>
     <td style="background-color:#003A70;padding:20px 32px;border-radius:8px 8px 0 0;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
@@ -196,14 +191,12 @@ send_notification() {
     </td>
   </tr>
 
-  <!-- Summary line -->
   <tr>
     <td style="padding:20px 32px 8px 32px;font-size:14px;color:#505F79;line-height:1.6;">
       The Kafka topic retention update for <strong>__TOPIC__</strong> completed at <strong>__TIMESTAMP__</strong>.
     </td>
   </tr>
 
-  <!-- Details table -->
   <tr>
     <td style="padding:12px 32px;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
@@ -256,7 +249,6 @@ send_notification() {
     </td>
   </tr>
 
-  <!-- Topic describe BEFORE -->
   <tr>
     <td style="padding:8px 32px 0 32px;font-size:12px;color:#6B778C;font-weight:600;">
       TOPIC DESCRIBE (BEFORE)
@@ -268,7 +260,6 @@ send_notification() {
     </td>
   </tr>
 
-  <!-- Topic describe AFTER -->
   <tr>
     <td style="padding:12px 32px 0 32px;font-size:12px;color:#6B778C;font-weight:600;">
       TOPIC DESCRIBE (AFTER)
@@ -280,7 +271,6 @@ send_notification() {
     </td>
   </tr>
 
-  <!-- Error block -->
   <tr>
     <td style="padding:12px 32px 0 32px;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
@@ -295,7 +285,6 @@ send_notification() {
     </td>
   </tr>
 
-  <!-- Footer -->
   <tr>
     <td style="padding:24px 32px;font-size:11px;color:#97A0AF;border-top:1px solid #dfe1e6;margin-top:16px;text-align:center;line-height:1.6;">
       Kafka STP Retention Service &bull; This is an automated notification.<br>
@@ -334,7 +323,6 @@ HTMLEOF
     email_body="${email_body//__TOPIC_DESC_AFTER__/${desc_after_html}}"
     email_body="${email_body//__ERROR__/${err_html}}"
 
-    # Send via sendmail
     if [[ ! -x "$SENDMAIL_BIN" ]]; then
       echo "WARN: sendmail not found at $SENDMAIL_BIN; skipping email." >&2
       return 0
@@ -358,9 +346,8 @@ main() {
   local days="" ms=""
   local dry_run=0
   local cmdcfg="${DEFAULT_CMD_CONFIG}"
-  local mail_domain="${DEFAULT_MAIL_DOMAIN}"
   local mail_from="${DEFAULT_MAIL_FROM}"
-  local cc_addr=""
+  local cc_addr="${DEFAULT_CC_ADDR}"
 
   if [[ $# -eq 0 ]]; then usage; exit 1; fi
 
@@ -373,7 +360,6 @@ main() {
       --days) days="${2:-}"; shift 2;;
       --ms) ms="${2:-}"; shift 2;;
       --command-config) cmdcfg="${2:-}"; shift 2;;
-      --mail-domain) mail_domain="${2:-}"; shift 2;;
       --mail-from) mail_from="${2:-}"; shift 2;;
       --cc) cc_addr="${2:-}"; shift 2;;
       --dry-run) dry_run=1; shift;;
@@ -396,22 +382,19 @@ main() {
   local before_topic_desc=""
   local after_topic_desc=""
   local end_ts=""
-
-  # Identify OS user without calling whoami (per your request)
   local os_user="${SUDO_USER:-${LOGNAME:-unknown}}"
 
   finalize() {
     local exit_code="$1"
     end_ts="$(now_iso)"
 
-    # --- audit JSONL ---
     printf '{' >> "$AUDIT_FILE"
     printf '"timestamp_start":"%s",' "$(json_escape "$start_ts")" >> "$AUDIT_FILE"
     printf '"timestamp_end":"%s",' "$(json_escape "$end_ts")" >> "$AUDIT_FILE"
     printf '"inc":"%s",' "$(json_escape "$inc")" >> "$AUDIT_FILE"
     printf '"topic":"%s",' "$(json_escape "$topic")" >> "$AUDIT_FILE"
     printf '"bootstrap":"%s",' "$(json_escape "$bootstrap")" >> "$AUDIT_FILE"
-    printf '"command_config":"%s",' "$(json_escape "$cmdcfg")" >> "$AUDIT_FILE"
+    printf '"command_config":"%s",' "$(json_escape "$cmdfg")" >> "$AUDIT_FILE"
     printf '"soe_id":"%s",' "$(json_escape "$soeid")" >> "$AUDIT_FILE"
     printf '"os_user":"%s",' "$(json_escape "$os_user")" >> "$AUDIT_FILE"
     printf '"host":"%s",' "$(json_escape "$host")" >> "$AUDIT_FILE"
@@ -426,7 +409,6 @@ main() {
     printf '"error":"%s"' "$(json_escape "$error_msg")" >> "$AUDIT_FILE"
     printf '}\n' >> "$AUDIT_FILE"
 
-    # --- email (always attempt) ---
     INC="$inc"
     TOPIC="$topic"
     BOOTSTRAP="$bootstrap"
@@ -454,32 +436,31 @@ main() {
       status_color="#DE350B"
     fi
 
-    local to_addr="${soeid}@${mail_domain}"
+    local to_addr="${soeid}"
     local subject="[${status_label}] Kafka Topic Retention Update - ${topic} - ${inc}"
 
     send_notification "$to_addr" "$cc_addr" "$subject" "$status_label" "$status_color" || true
 
-    # --- console ---
     if [[ "$exit_code" -eq 0 ]]; then
       echo "OK: topic=$topic retention.ms=$retention_ms (before=$before_retention after=$after_retention)"
       echo "Audit: $AUDIT_FILE"
       echo "Email attempted to: $to_addr"
+      echo "Cc: $cc_addr"
     else
       echo "ERROR: $error_msg" >&2
       echo "Audit: $AUDIT_FILE" >&2
       echo "Email attempted to: $to_addr" >&2
+      echo "Cc: $cc_addr" >&2
     fi
 
     exit "$exit_code"
   }
 
-  # Required args
   if [[ -z "$inc" || -z "$topic" || -z "$bootstrap" || -z "$soeid" ]]; then
     error_msg="Missing required arguments (need --inc, --topic, --bootstrap, --soeid)"
     finalize 1
   fi
 
-  # command-config must exist/readable
   if [[ ! -f "$cmdcfg" ]]; then
     error_msg="command-config not found: $cmdcfg"
     finalize 1
@@ -489,13 +470,11 @@ main() {
     finalize 1
   fi
 
-  # Exactly one of --days or --ms
   if [[ -n "$days" && -n "$ms" ]] || [[ -z "$days" && -z "$ms" ]]; then
     error_msg="Specify exactly one of --days or --ms"
     finalize 1
   fi
 
-  # Range enforcement + conversion
   if [[ -n "$days" ]]; then
     requested_mode="days"
     if ! [[ "$days" =~ ^[0-9]+$ ]]; then
@@ -520,18 +499,15 @@ main() {
     retention_ms="$ms"
   fi
 
-  # BEFORE snapshots
   before_retention="$(get_current_retention_ms "$topic" "$bootstrap" "$cmdcfg")"
   before_topic_desc="$(describe_topic "$topic" "$bootstrap" "$cmdcfg")"
 
   if [[ "$before_retention" == ERROR_DESCRIBE::* ]]; then
     error_msg="${before_retention#ERROR_DESCRIBE::}"
-    # attempt describe again after failure (as requested)
     after_topic_desc="$(describe_topic "$topic" "$bootstrap" "$cmdcfg")"
     finalize 1
   fi
 
-  # DRY RUN
   if (( dry_run == 1 )); then
     status="SUCCESS"
     after_retention="$before_retention"
@@ -539,7 +515,6 @@ main() {
     finalize 0
   fi
 
-  # Apply change
   set +e
   local alter_out
   alter_out="$("$KAFKA_CONFIGS" --bootstrap-server "$bootstrap" --command-config "$cmdcfg" \
@@ -549,19 +524,16 @@ main() {
 
   if [[ $alter_rc -ne 0 ]]; then
     error_msg="$alter_out"
-    # attempt describe again after failure
     after_retention="$(get_current_retention_ms "$topic" "$bootstrap" "$cmdcfg")"
     after_topic_desc="$(describe_topic "$topic" "$bootstrap" "$cmdcfg")"
     finalize 1
   fi
 
-  # AFTER snapshots
   after_retention="$(get_current_retention_ms "$topic" "$bootstrap" "$cmdcfg")"
   after_topic_desc="$(describe_topic "$topic" "$bootstrap" "$cmdcfg")"
 
   if [[ "$after_retention" == ERROR_DESCRIBE::* ]]; then
     error_msg="${after_retention#ERROR_DESCRIBE::}"
-    # attempt describe again after failure
     after_topic_desc="$(describe_topic "$topic" "$bootstrap" "$cmdcfg")"
     finalize 1
   fi
