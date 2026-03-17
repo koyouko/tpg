@@ -30,14 +30,20 @@ DAY_MS=86400000
 MIN_MS=$((MIN_DAYS * DAY_MS))
 MAX_MS=$((MAX_DAYS * DAY_MS))
 
+DEFAULT_BOOTSTRAP_PORT="9093"
+
 usage() {
   cat <<EOF
 Usage:
-  $(basename "$0") --inc INC12345 --topic <topic> --bootstrap <host:9093[,host:9093...]> --soeid <SoEID> \\
+  $(basename "$0") --inc INC12345 --topic <topic> --bootstrap <host[,host...]|host:9093[,host:9093...]> --soeid <SoEID> \\
     (--days <1..7> | --ms <86400000..604800000>) \\
     [--command-config /path/to/adminclient.properties] \\
     [--mail-from sender@domain] [--cc addr@domain] \\
     [--dry-run]
+
+Notes:
+  - If only hostname is provided, :${DEFAULT_BOOTSTRAP_PORT} will be appended automatically.
+  - Hostname must be FQDN. Short hostnames are not allowed.
 EOF
 }
 
@@ -78,6 +84,60 @@ html_escape() {
   s="${s//\"/&quot;}"
   s="${s//$'\r'/}"
   printf '%s' "$s"
+}
+
+normalize_bootstrap_servers() {
+  local input="$1"
+  local normalized="" entry host port
+
+  [[ -n "$input" ]] || {
+    echo "ERROR: --bootstrap cannot be empty"
+    return 1
+  }
+
+  IFS=',' read -r -a entries <<< "$input"
+
+  for entry in "${entries[@]}"; do
+    entry="${entry//[[:space:]]/}"
+    [[ -n "$entry" ]] || {
+      echo "ERROR: Invalid --bootstrap value: empty host entry"
+      return 1
+    }
+
+    if [[ "$entry" == *:* ]]; then
+      host="${entry%%:*}"
+      port="${entry##*:}"
+      [[ -n "$port" ]] || {
+        echo "ERROR: Invalid bootstrap entry '$entry': missing port"
+        return 1
+      }
+      [[ "$port" =~ ^[0-9]+$ ]] || {
+        echo "ERROR: Invalid bootstrap entry '$entry': port must be numeric"
+        return 1
+      }
+    else
+      host="$entry"
+      port="$DEFAULT_BOOTSTRAP_PORT"
+    fi
+
+    [[ "$host" == *.* ]] || {
+      echo "ERROR: Invalid bootstrap host '$host': hostname must be FQDN"
+      return 1
+    }
+
+    [[ "$host" =~ ^[A-Za-z0-9.-]+$ ]] || {
+      echo "ERROR: Invalid bootstrap host '$host'"
+      return 1
+    }
+
+    if [[ -z "$normalized" ]]; then
+      normalized="${host}:${port}"
+    else
+      normalized="${normalized},${host}:${port}"
+    fi
+  done
+
+  printf '%s\n' "$normalized"
 }
 
 get_current_retention_ms() {
@@ -362,6 +422,7 @@ main() {
   local start_ts end_ts host status error_msg requested_mode retention_ms
   local before_retention after_retention before_topic_desc after_topic_desc
   local os_user
+  local alter_out alter_rc
 
   start_ts="$(now_iso)"
   end_ts=""
@@ -445,6 +506,11 @@ main() {
 
   [[ -f "$cmdcfg" && -r "$cmdcfg" ]] || {
     error_msg="command-config not found or not readable: $cmdcfg"
+    finalize 1
+  }
+
+  bootstrap="$(normalize_bootstrap_servers "$bootstrap")" || {
+    error_msg="Invalid --bootstrap value. Use FQDN only; short hostnames are not allowed. If port is omitted, :${DEFAULT_BOOTSTRAP_PORT} is added automatically."
     finalize 1
   }
 
