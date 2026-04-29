@@ -32,8 +32,6 @@ Required:
   --bootstrap         <string>   Bootstrap server(s), comma-separated
   --otp               <string>   OTP password for GPG encryption
   --artifactory-url   <string>   Artifactory base URL
-  --artifactory-user  <string>   Artifactory username
-  --artifactory-pass  <string>   Artifactory password
 
 Optional:
   --requestor         <string>   Requestor name (default: ucd-user)
@@ -58,8 +56,6 @@ OTP=""
 REQUESTOR="ucd-user"
 KAFKA_TIMEOUT_MS="$KAFKA_TIMEOUT_MS_DEFAULT"
 ARTIFACTORY_BASE_URL=""
-ARTIFACTORY_USER=""
-ARTIFACTORY_PASSWORD=""
 UCD_RUN_ID="$(date +%s)"
 SOEID=""
 EMAIL_CC="dl.icg.global.kafka.ste.admin@imcnam.ssmb.com"
@@ -75,8 +71,6 @@ while [[ $# -gt 0 ]]; do
         --otp)               OTP="$2";                shift 2 ;;
         --requestor)         REQUESTOR="$2";          shift 2 ;;
         --artifactory-url)   ARTIFACTORY_BASE_URL="$2"; shift 2 ;;
-        --artifactory-user)  ARTIFACTORY_USER="$2";   shift 2 ;;
-        --artifactory-pass)  ARTIFACTORY_PASSWORD="$2"; shift 2 ;;
         --run-id)            UCD_RUN_ID="$2";         shift 2 ;;
         --soeid)             SOEID="$2";              shift 2 ;;
         --email-cc)          EMAIL_CC="$2";           shift 2 ;;
@@ -165,8 +159,7 @@ fail() {
 [[ -z "$KAFKA_BOOTSTRAP" ]]    && fail "Bootstrap server(s) missing (use --bootstrap)"
 [[ -z "$OTP" ]]                && fail "OTP password missing (use --otp)"
 [[ -z "$ARTIFACTORY_BASE_URL" ]] && fail "Artifactory URL missing (use --artifactory-url)"
-[[ -z "$ARTIFACTORY_USER" ]]   && fail "Artifactory user missing (use --artifactory-user)"
-[[ -z "$ARTIFACTORY_PASSWORD" ]] && fail "Artifactory password missing (use --artifactory-pass)"
+[[ -z "$ARTIFACTORY_TOKEN" ]] && fail "ARTIFACTORY_TOKEN environment variable missing"
 
 # Validate format (prevent path traversal)
 if [[ ! "$INC" =~ ^[A-Za-z0-9_-]+$ ]]; then
@@ -445,7 +438,7 @@ CHECKSUM_URL="${ARTIFACTORY_BASE_URL%/}/${UPLOAD_PATH}/$(basename "$CHECKSUM_FIL
 # Create secure header file for curl (avoids exposing credentials in process list)
 CURL_HEADER_FILE=$(mktemp)
 chmod 600 "$CURL_HEADER_FILE"
-printf "Authorization: Basic %s\n" "$(printf '%s:%s' "$ARTIFACTORY_USER" "$ARTIFACTORY_PASSWORD" | base64)" > "$CURL_HEADER_FILE"
+printf "Authorization: Bearer %s\n" "$ARTIFACTORY_TOKEN" > "$CURL_HEADER_FILE"
 
 upload_file() {
     local src_file="$1"
