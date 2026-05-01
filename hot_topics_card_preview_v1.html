@@ -1,0 +1,290 @@
+<h2 class="sr-only">Preview of the proposed Hot Topics card on a Mission Control cluster detail page, with a clickable drill-down modal showing a 3-day trend chart for a selected topic.</h2>
+
+<div id="liq-root" style="--bg:#f7f4ef;--bg-strong:#fffdf8;--surface:rgba(255,255,255,0.86);--surface-strong:#fff;--ink:#1e232c;--ink-soft:#596173;--border:rgba(30,35,44,0.08);--line:rgba(30,35,44,0.12);--shadow:0 22px 45px rgba(20,22,28,0.08);--accent:#ff641f;--accent-soft:rgba(255,100,31,0.12);--healthy:#199d76;--healthy-soft:rgba(25,157,118,0.14);--degraded:#d18b1e;--degraded-soft:rgba(209,139,30,0.14);--down:#d9485f;--down-soft:rgba(217,72,95,0.14);--mono:'SFMono-Regular','SF Mono','Cascadia Code',Consolas,monospace;background:var(--bg);padding:22px;border-radius:18px;font-family:'Avenir Next','Segoe UI','Helvetica Neue',sans-serif;color:var(--ink);position:relative;overflow:hidden;">
+
+<style>
+  #liq-root *{box-sizing:border-box;}
+  #liq-root .liq-h1{font-family:'Iowan Old Style','Palatino Linotype',Georgia,serif;font-size:1.6rem;margin:6px 0 6px;font-weight:500;letter-spacing:-0.01em;}
+  #liq-root .liq-sub{color:var(--ink-soft);margin:0;font-size:0.92rem;}
+  #liq-root .liq-detail{border-radius:28px;background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow);backdrop-filter:blur(10px);padding:22px;}
+  #liq-root .liq-header{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;}
+  #liq-root .liq-meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px;}
+  #liq-root .liq-pill{display:inline-flex;align-items:center;gap:8px;padding:7px 11px;border-radius:999px;background:rgba(247,244,239,0.9);border:1px solid var(--line);color:var(--ink-soft);font-size:0.84rem;}
+  #liq-root .liq-pill strong{color:var(--ink);font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;font-weight:500;}
+  #liq-root .liq-env{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;font-size:0.74rem;font-weight:500;letter-spacing:0.04em;background:rgba(217,72,95,0.12);color:#b9334d;}
+  #liq-root .liq-orb{width:200px;border-radius:24px;padding:14px 16px;background:linear-gradient(180deg,var(--healthy-soft),#fff);display:flex;flex-direction:column;gap:4px;font-variant-numeric:tabular-nums;}
+  #liq-root .liq-orb b{color:var(--healthy);font-size:0.95rem;font-weight:500;letter-spacing:0.03em;}
+  #liq-root .liq-orb small{color:var(--ink-soft);font-size:0.78rem;}
+
+  /* Hot Topics card — the new thing */
+  #liq-root .liq-hot{margin-top:18px;border-radius:24px;border:1px solid var(--line);background:linear-gradient(180deg,#fff,rgba(247,244,239,0.9));padding:18px;display:grid;gap:14px;}
+  #liq-root .liq-hot__head{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap;}
+  #liq-root .liq-hot__title{display:flex;align-items:center;gap:10px;}
+  #liq-root .liq-eyebrow{font-size:0.7rem;text-transform:uppercase;letter-spacing:0.12em;color:var(--ink-soft);font-weight:500;}
+  #liq-root .liq-hot h3{font-family:'Iowan Old Style',Georgia,serif;margin:4px 0 0;font-size:1.32rem;font-weight:500;letter-spacing:-0.01em;}
+  #liq-root .liq-count{display:inline-flex;align-items:baseline;gap:6px;background:var(--accent-soft);color:#a8420f;padding:6px 12px;border-radius:999px;font-size:0.82rem;font-weight:500;}
+  #liq-root .liq-count b{font-size:1.05rem;font-weight:500;}
+  #liq-root .liq-switch{display:inline-flex;background:rgba(247,244,239,0.95);border:1px solid var(--line);border-radius:999px;padding:3px;gap:2px;}
+  #liq-root .liq-switch button{appearance:none;background:transparent;border:0;padding:6px 11px;border-radius:999px;font:inherit;font-size:0.78rem;color:var(--ink-soft);cursor:pointer;letter-spacing:0.02em;}
+  #liq-root .liq-switch button.is-on{background:#fff;color:var(--ink);box-shadow:0 1px 2px rgba(20,22,28,0.06);}
+  #liq-root .liq-window{font-size:0.78rem;color:var(--ink-soft);}
+
+  #liq-root .liq-rows{display:grid;gap:8px;}
+  #liq-root .liq-row{display:grid;grid-template-columns:22px 1.4fr 1fr auto auto;align-items:center;gap:14px;padding:10px 12px;border-radius:16px;background:var(--surface-strong);border:1px solid var(--line);cursor:pointer;transition:border-color .15s,box-shadow .15s,transform .05s;}
+  #liq-root .liq-row:hover{border-color:rgba(255,100,31,0.35);box-shadow:0 10px 24px rgba(255,100,31,0.08);}
+  #liq-root .liq-row:active{transform:translateY(1px);}
+  #liq-root .liq-rank{color:var(--ink-soft);font-size:0.85rem;font-variant-numeric:tabular-nums;}
+  #liq-root .liq-topic{display:grid;gap:2px;min-width:0;}
+  #liq-root .liq-topic code{font-family:var(--mono);font-size:0.85rem;background:rgba(20,24,31,0.05);padding:3px 8px;border-radius:10px;color:var(--ink);width:fit-content;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  #liq-root .liq-topic small{color:var(--ink-soft);font-size:0.74rem;letter-spacing:0.02em;}
+  #liq-root .liq-spark{height:34px;width:100%;}
+  #liq-root .liq-val{text-align:right;font-variant-numeric:tabular-nums;}
+  #liq-root .liq-val b{display:block;font-size:0.95rem;font-weight:500;}
+  #liq-root .liq-val small{color:var(--ink-soft);font-size:0.72rem;}
+  #liq-root .liq-share{display:inline-flex;align-items:center;padding:5px 9px;border-radius:999px;font-size:0.72rem;font-weight:500;background:var(--accent-soft);color:#a8420f;letter-spacing:0.02em;}
+  #liq-root .liq-share.is-cool{background:rgba(89,97,115,0.1);color:var(--ink-soft);}
+
+  #liq-root .liq-foot{display:flex;justify-content:space-between;align-items:center;margin-top:2px;}
+  #liq-root .liq-expand{appearance:none;background:transparent;border:1px solid var(--line);border-radius:999px;padding:6px 14px;font:inherit;font-size:0.78rem;color:var(--ink);cursor:pointer;}
+  #liq-root .liq-expand:hover{border-color:var(--accent);color:var(--accent);}
+  #liq-root .liq-trend-note{font-size:0.74rem;color:var(--ink-soft);}
+
+  /* Component grid stub below — for placement context */
+  #liq-root .liq-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px;}
+  #liq-root .liq-card{border:1px solid var(--line);border-radius:20px;background:#fff;padding:14px;display:grid;gap:10px;}
+  #liq-root .liq-card .liq-pill-status{align-self:start;background:var(--healthy-soft);color:var(--healthy);padding:4px 10px;border-radius:999px;font-size:0.72rem;font-weight:500;width:fit-content;}
+  #liq-root .liq-card strong{font-size:0.98rem;font-weight:500;}
+  #liq-root .liq-card code{font-family:var(--mono);font-size:0.74rem;background:rgba(20,24,31,0.05);padding:5px 8px;border-radius:10px;color:var(--ink);width:fit-content;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+
+  /* Modal */
+  #liq-root .liq-modal-backdrop{display:none;position:absolute;inset:0;background:rgba(20,22,28,0.32);backdrop-filter:blur(2px);z-index:5;align-items:flex-start;justify-content:center;padding:40px 16px 16px;}
+  #liq-root .liq-modal-backdrop.is-open{display:flex;}
+  #liq-root .liq-modal{background:#fff;border-radius:24px;border:1px solid var(--line);box-shadow:0 30px 60px rgba(20,22,28,0.18);width:min(620px,100%);padding:20px;display:grid;gap:14px;}
+  #liq-root .liq-modal__head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;}
+  #liq-root .liq-modal__head h4{font-family:'Iowan Old Style',Georgia,serif;font-size:1.2rem;font-weight:500;margin:0;letter-spacing:-0.01em;}
+  #liq-root .liq-modal__head .liq-eyebrow{display:block;margin-bottom:4px;}
+  #liq-root .liq-close{appearance:none;border:1px solid var(--line);background:#fff;border-radius:999px;width:30px;height:30px;cursor:pointer;color:var(--ink-soft);font-size:1.1rem;line-height:1;}
+  #liq-root .liq-stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;}
+  #liq-root .liq-stat{background:rgba(247,244,239,0.85);border-radius:16px;padding:10px 12px;display:grid;gap:2px;}
+  #liq-root .liq-stat label{font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;color:var(--ink-soft);font-weight:500;}
+  #liq-root .liq-stat b{font-size:1.05rem;font-weight:500;font-variant-numeric:tabular-nums;}
+  #liq-root .liq-chartwrap{position:relative;height:220px;}
+  #liq-root .liq-modal__note{font-size:0.78rem;color:var(--ink-soft);background:rgba(247,244,239,0.85);border-radius:14px;padding:10px 12px;border:1px dashed var(--line);}
+</style>
+
+<!-- mock cluster header so the card has context -->
+<section class="liq-detail">
+  <div class="liq-header">
+    <div>
+      <span class="liq-env">PROD</span>
+      <h2 class="liq-h1">Prod East</h2>
+      <p class="liq-sub">Cluster healthy. 5 hot topics in the last 3 days.</p>
+      <div class="liq-meta">
+        <span class="liq-pill"><strong>Mode</strong>SAML</span>
+        <span class="liq-pill"><strong>Observed</strong>just now</span>
+        <span class="liq-pill"><strong>Components</strong>6</span>
+        <span class="liq-pill"><strong>Topics</strong>4,812</span>
+      </div>
+    </div>
+    <div class="liq-orb"><b>HEALTHY</b><small>Last checked just now</small></div>
+  </div>
+
+  <!-- ── New Hot Topics card ── -->
+  <section class="liq-hot" aria-label="Hot topics">
+    <div class="liq-hot__head">
+      <div class="liq-hot__title">
+        <div>
+          <span class="liq-eyebrow">Hot topics · 3-day trend</span>
+          <h3>Top 5 by throughput</h3>
+        </div>
+        <span class="liq-count"><b>5</b>hot</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div class="liq-switch" role="tablist" aria-label="Hotness metric">
+          <button class="is-on" data-metric="bytes">Bytes in+out</button>
+          <button data-metric="messages">Messages</button>
+          <button data-metric="logsize">Log size</button>
+          <button data-metric="requests">Requests</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="liq-rows" id="liq-rows"></div>
+
+    <div class="liq-foot">
+      <span class="liq-trend-note">Ranked by 3-day average · sparklines show last 72 hours · % of cluster traffic</span>
+      <button class="liq-expand">Show top 10</button>
+    </div>
+  </section>
+</section>
+
+<!-- component grid stub for placement context -->
+<div class="liq-grid">
+  <article class="liq-card">
+    <span class="liq-pill-status">HEALTHY</span>
+    <strong>Kafka</strong>
+    <code>kafka-broker-1.internal:9092</code>
+  </article>
+  <article class="liq-card">
+    <span class="liq-pill-status">HEALTHY</span>
+    <strong>Schema registry</strong>
+    <code>schema-registry.internal:8081</code>
+  </article>
+  <article class="liq-card">
+    <span class="liq-pill-status">HEALTHY</span>
+    <strong>Control center</strong>
+    <code>control-center.internal:9021</code>
+  </article>
+</div>
+
+<!-- drill-down modal -->
+<div class="liq-modal-backdrop" id="liq-backdrop">
+  <div class="liq-modal" role="dialog" aria-modal="true" aria-labelledby="liq-modal-title">
+    <div class="liq-modal__head">
+      <div>
+        <span class="liq-eyebrow">Hot topic · 3-day trend</span>
+        <h4 id="liq-modal-title">orders.events</h4>
+      </div>
+      <button class="liq-close" id="liq-close" aria-label="Close">×</button>
+    </div>
+    <div class="liq-stats">
+      <div class="liq-stat"><label>Current</label><b id="liq-cur">142 MB/s</b></div>
+      <div class="liq-stat"><label>3-day avg</label><b id="liq-avg">128 MB/s</b></div>
+      <div class="liq-stat"><label>Peak (3d)</label><b id="liq-peak">203 MB/s</b></div>
+    </div>
+    <div class="liq-chartwrap"><canvas id="liq-chart"></canvas></div>
+    <p class="liq-modal__note">Per-partition breakdown is parked for phase 2 — this drill-down currently shows the topic-level 3-day series only.</p>
+  </div>
+</div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script>
+(function(){
+  const root=document.getElementById('liq-root');
+  const rowsEl=document.getElementById('liq-rows');
+  const backdrop=document.getElementById('liq-backdrop');
+  const closeBtn=document.getElementById('liq-close');
+  const titleEl=document.getElementById('liq-modal-title');
+  const curEl=document.getElementById('liq-cur');
+  const avgEl=document.getElementById('liq-avg');
+  const peakEl=document.getElementById('liq-peak');
+  const switchEl=root.querySelector('.liq-switch');
+
+  const fmt={
+    bytes:(v)=>v>=1?v.toFixed(0)+' MB/s':(v*1024).toFixed(0)+' KB/s',
+    messages:(v)=>v.toLocaleString(undefined,{maximumFractionDigits:0})+'/s',
+    logsize:(v)=>v.toFixed(1)+' GB',
+    requests:(v)=>v.toLocaleString(undefined,{maximumFractionDigits:0})+'/s',
+  };
+  const unitLabel={bytes:'MB/s',messages:'msg/s',logsize:'GB',requests:'req/s'};
+
+  // mock 3-day series, 36 points (every 2h)
+  function series(seed,base,vol){
+    const out=[];let s=seed;
+    for(let i=0;i<36;i++){s=(s*9301+49297)%233280;const r=s/233280;out.push(Math.max(0,base*(1+(r-0.5)*vol)));}
+    return out;
+  }
+  const data={
+    bytes:[
+      {t:'orders.events',v:142,avg:128,peak:203,share:0.31,seed:11,base:128,vol:0.55},
+      {t:'payments.captures',v:96,avg:88,peak:151,share:0.21,seed:22,base:88,vol:0.6},
+      {t:'fulfillment.shipments',v:64,avg:71,peak:118,share:0.17,seed:33,base:71,vol:0.5},
+      {t:'audit.log',v:48,avg:44,peak:79,share:0.10,seed:44,base:44,vol:0.4},
+      {t:'telemetry.metrics',v:31,avg:36,peak:62,share:0.08,seed:55,base:36,vol:0.7},
+    ],
+    messages:[
+      {t:'telemetry.metrics',v:184000,avg:172000,peak:240000,share:0.42,seed:91,base:172,vol:0.45},
+      {t:'audit.log',v:96000,avg:91000,peak:138000,share:0.22,seed:71,base:91,vol:0.5},
+      {t:'orders.events',v:54000,avg:49000,peak:88000,share:0.12,seed:81,base:49,vol:0.6},
+      {t:'fulfillment.shipments',v:31000,avg:28000,peak:46000,share:0.07,seed:101,base:28,vol:0.4},
+      {t:'payments.captures',v:24000,avg:23000,peak:39000,share:0.05,seed:111,base:23,vol:0.55},
+    ],
+    logsize:[
+      {t:'audit.log',v:1820.4,avg:1780.0,peak:1890.0,share:0.46,seed:21,base:1780,vol:0.05},
+      {t:'orders.events',v:612.7,avg:598.0,peak:640.0,share:0.15,seed:31,base:598,vol:0.06},
+      {t:'telemetry.metrics',v:418.2,avg:402.0,peak:445.0,share:0.10,seed:41,base:402,vol:0.07},
+      {t:'fulfillment.shipments',v:289.5,avg:280.0,peak:310.0,share:0.07,seed:51,base:280,vol:0.06},
+      {t:'payments.captures',v:188.0,avg:185.0,peak:198.0,share:0.05,seed:61,base:185,vol:0.04},
+    ],
+    requests:[
+      {t:'orders.events',v:14200,avg:13100,peak:21000,share:0.28,seed:13,base:13.1,vol:0.55},
+      {t:'telemetry.metrics',v:11800,avg:11200,peak:16500,share:0.24,seed:23,base:11.2,vol:0.5},
+      {t:'payments.captures',v:7400,avg:7100,peak:11800,share:0.15,seed:43,base:7.1,vol:0.6},
+      {t:'fulfillment.shipments',v:5200,avg:4900,peak:8800,share:0.10,seed:53,base:4.9,vol:0.5},
+      {t:'audit.log',v:3100,avg:2950,peak:5400,share:0.06,seed:63,base:2.95,vol:0.45},
+    ],
+  };
+
+  let metric='bytes';
+  let chart=null;
+
+  function sparkPath(values){
+    const w=180,h=34,pad=2;
+    const max=Math.max(...values),min=Math.min(...values);
+    const span=max-min||1;
+    return values.map((v,i)=>{
+      const x=pad+(i/(values.length-1))*(w-pad*2);
+      const y=h-pad-((v-min)/span)*(h-pad*2);
+      return (i===0?'M':'L')+x.toFixed(1)+','+y.toFixed(1);
+    }).join(' ');
+  }
+
+  function render(){
+    rowsEl.innerHTML='';
+    data[metric].forEach((d,i)=>{
+      const row=document.createElement('div');
+      row.className='liq-row';
+      row.dataset.topic=d.t;
+      const pts=series(d.seed,d.base,d.vol);
+      row.innerHTML=
+        '<span class="liq-rank">'+(i+1)+'</span>'+
+        '<div class="liq-topic"><code>'+d.t+'</code><small>3-day avg '+fmt[metric](d.avg)+'</small></div>'+
+        '<svg class="liq-spark" viewBox="0 0 180 34" preserveAspectRatio="none"><path d="'+sparkPath(pts)+'" fill="none" stroke="#ff641f" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/></svg>'+
+        '<div class="liq-val"><b>'+fmt[metric](d.v)+'</b><small>now</small></div>'+
+        '<span class="liq-share'+(d.share<0.1?' is-cool':'')+'">'+(d.share*100).toFixed(0)+'% of cluster</span>';
+      row.addEventListener('click',()=>openModal(d,pts));
+      rowsEl.appendChild(row);
+    });
+  }
+
+  function openModal(d,pts){
+    titleEl.textContent=d.t;
+    curEl.textContent=fmt[metric](d.v);
+    avgEl.textContent=fmt[metric](d.avg);
+    peakEl.textContent=fmt[metric](d.peak);
+    backdrop.classList.add('is-open');
+    if(chart){chart.destroy();chart=null;}
+    const ctx=document.getElementById('liq-chart').getContext('2d');
+    const labels=pts.map((_,i)=>{const h=(35-i)*2;return h===0?'now':'-'+h+'h';});
+    chart=new Chart(ctx,{
+      type:'line',
+      data:{labels,datasets:[{
+        label:unitLabel[metric],data:pts,
+        borderColor:'#ff641f',backgroundColor:'rgba(255,100,31,0.12)',
+        borderWidth:1.8,fill:true,tension:0.3,pointRadius:0,pointHoverRadius:4,
+      }]},
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        plugins:{legend:{display:false},tooltip:{callbacks:{label:(c)=>fmt[metric](c.parsed.y)}}},
+        scales:{
+          x:{ticks:{maxTicksLimit:8,color:'#596173',font:{size:11}},grid:{display:false}},
+          y:{ticks:{color:'#596173',font:{size:11},callback:(v)=>fmt[metric](v)},grid:{color:'rgba(30,35,44,0.06)'}}
+        }
+      }
+    });
+  }
+  function closeModal(){backdrop.classList.remove('is-open');if(chart){chart.destroy();chart=null;}}
+
+  switchEl.addEventListener('click',(e)=>{
+    const b=e.target.closest('button');if(!b)return;
+    switchEl.querySelectorAll('button').forEach(x=>x.classList.remove('is-on'));
+    b.classList.add('is-on');metric=b.dataset.metric;render();
+  });
+  closeBtn.addEventListener('click',closeModal);
+  backdrop.addEventListener('click',(e)=>{if(e.target===backdrop)closeModal();});
+
+  render();
+})();
+</script>
