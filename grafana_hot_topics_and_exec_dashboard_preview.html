@@ -1,0 +1,474 @@
+<h2 class="sr-only">Preview of two Grafana dashboards: LenseIQ Kafka Hot Topics with top-N panels, trending-up table, tenant share donut, and drill-down chart; and LenseIQ Executive Overview with cluster health stat row, 7-day stacked health history, and a worst-clusters table.</h2>
+
+<div id="g-root" style="--g-bg:#0b0e14;--g-panel:#181b1f;--g-panel-border:rgba(204,204,220,0.09);--g-text:#ccccdc;--g-text-mute:#8e8e99;--g-text-dim:#6a6a73;--g-accent:#3274d9;--g-green:#56a64b;--g-orange:#ff9830;--g-yellow:#f2cc0c;--g-red:#e02f44;--g-purple:#9d4edd;--g-cyan:#37d3a3;background:var(--g-bg);color:var(--g-text);padding:0;border-radius:14px;font-family:-apple-system,'Segoe UI',Roboto,'Inter',sans-serif;font-size:13px;line-height:1.5;overflow:hidden;border:1px solid var(--g-panel-border);">
+
+<style>
+  #g-root *{box-sizing:border-box;}
+  #g-root .g-topbar{background:#111217;border-bottom:1px solid var(--g-panel-border);padding:8px 14px;display:flex;align-items:center;gap:14px;font-size:12px;color:var(--g-text-mute);}
+  #g-root .g-crumb{color:var(--g-text);font-weight:500;}
+  #g-root .g-tabs{margin-left:auto;display:flex;gap:2px;background:#0b0e14;padding:3px;border-radius:6px;border:1px solid var(--g-panel-border);}
+  #g-root .g-tab{appearance:none;background:transparent;border:0;padding:5px 12px;border-radius:4px;color:var(--g-text-mute);cursor:pointer;font:inherit;font-size:12px;}
+  #g-root .g-tab.is-on{background:#1f2228;color:var(--g-text);}
+  #g-root .g-toolbar{background:#111217;border-bottom:1px solid var(--g-panel-border);padding:8px 14px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  #g-root .g-var{display:flex;align-items:center;gap:6px;font-size:12px;}
+  #g-root .g-var label{color:var(--g-text-mute);}
+  #g-root .g-pill{background:#1f2228;border:1px solid var(--g-panel-border);padding:3px 9px;border-radius:3px;color:var(--g-text);min-width:64px;display:inline-flex;align-items:center;gap:6px;}
+  #g-root .g-pill::after{content:"▾";font-size:9px;color:var(--g-text-dim);}
+  #g-root .g-pill.is-multi{background:#1f2228;}
+  #g-root .g-time{margin-left:auto;display:flex;gap:6px;align-items:center;font-size:12px;color:var(--g-text-mute);}
+  #g-root .g-time .g-pill{min-width:auto;color:var(--g-text);}
+  #g-root .g-canvas{padding:10px;background:var(--g-bg);}
+  #g-root .g-grid{display:grid;grid-template-columns:repeat(24,1fr);gap:8px;}
+  #g-root .g-panel{background:var(--g-panel);border:1px solid var(--g-panel-border);border-radius:3px;display:flex;flex-direction:column;overflow:hidden;}
+  #g-root .g-panel__title{padding:8px 12px;font-size:12px;color:var(--g-text);font-weight:500;letter-spacing:0.01em;border-bottom:1px solid rgba(0,0,0,0);}
+  #g-root .g-panel__body{padding:8px 12px 12px;flex:1;display:flex;flex-direction:column;gap:6px;min-height:0;}
+  #g-root .g-stat{padding:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-align:center;}
+  #g-root .g-stat__num{font-size:38px;font-weight:500;line-height:1;font-variant-numeric:tabular-nums;}
+  #g-root .g-stat__label{font-size:11px;color:var(--g-text-mute);text-transform:uppercase;letter-spacing:0.06em;}
+  #g-root .g-stat__sub{font-size:11px;color:var(--g-text-mute);margin-top:2px;}
+  #g-root .g-stat--bg-green{background:rgba(86,166,75,0.18);}
+  #g-root .g-stat--bg-orange{background:rgba(255,152,48,0.18);}
+  #g-root .g-stat--bg-red{background:rgba(224,47,68,0.18);}
+  #g-root .g-stat--bg-blue{background:rgba(50,116,217,0.18);}
+  #g-root .g-stat--green .g-stat__num{color:var(--g-green);}
+  #g-root .g-stat--orange .g-stat__num{color:var(--g-orange);}
+  #g-root .g-stat--red .g-stat__num{color:var(--g-red);}
+  #g-root .g-stat--blue .g-stat__num{color:var(--g-accent);}
+  #g-root .g-stat--orange-strong .g-stat__num{color:var(--g-orange);}
+
+  #g-root .g-bargauge{display:grid;gap:5px;}
+  #g-root .g-bg-row{display:grid;grid-template-columns:1fr auto;align-items:center;gap:8px;}
+  #g-root .g-bg-row__label{font-size:11px;color:var(--g-text);font-family:'SF Mono',monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%;}
+  #g-root .g-bg-row__bar{grid-column:1/-1;height:8px;border-radius:2px;background:#0b0e14;border:1px solid var(--g-panel-border);overflow:hidden;}
+  #g-root .g-bg-row__fill{height:100%;border-radius:1px;}
+  #g-root .g-bg-row__val{font-size:11px;color:var(--g-text-mute);font-variant-numeric:tabular-nums;}
+
+  #g-root .g-chart{flex:1;min-height:0;position:relative;}
+  #g-root canvas{display:block;}
+
+  #g-root table.g-table{width:100%;border-collapse:collapse;font-size:11.5px;}
+  #g-root table.g-table th{text-align:left;padding:5px 8px;color:var(--g-text-mute);font-weight:500;border-bottom:1px solid var(--g-panel-border);background:#1f2228;}
+  #g-root table.g-table td{padding:6px 8px;border-bottom:1px solid rgba(204,204,220,0.05);}
+  #g-root table.g-table tr:hover td{background:rgba(50,116,217,0.06);}
+  #g-root .g-cell-bg{padding:2px 6px;border-radius:2px;display:inline-block;font-variant-numeric:tabular-nums;}
+  #g-root .g-cell-bg--green{background:rgba(86,166,75,0.25);color:#8ec77a;}
+  #g-root .g-cell-bg--blue{background:rgba(50,116,217,0.25);color:#7fa9e8;}
+  #g-root .g-cell-bg--yellow{background:rgba(242,204,12,0.25);color:#ddc056;}
+  #g-root .g-cell-bg--orange{background:rgba(255,152,48,0.3);color:#ffba74;}
+  #g-root .g-cell-bg--red{background:rgba(224,47,68,0.32);color:#f08896;}
+  #g-root .g-mono{font-family:'SF Mono',monospace;}
+  #g-root .g-link{color:var(--g-accent);cursor:pointer;text-decoration:none;}
+  #g-root .g-link:hover{text-decoration:underline;}
+
+  #g-root .g-legend{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--g-text-mute);padding-top:4px;}
+  #g-root .g-legend span{display:inline-flex;align-items:center;gap:5px;}
+  #g-root .g-legend i{width:8px;height:8px;border-radius:1px;display:inline-block;}
+
+  #g-root .g-page{display:none;}
+  #g-root .g-page.is-on{display:block;}
+</style>
+
+<div class="g-topbar">
+  <span>Home</span><span>›</span><span>Dashboards</span><span>›</span>
+  <span class="g-crumb" id="g-title">LenseIQ — Kafka Hot Topics</span>
+  <div class="g-tabs" role="tablist">
+    <button class="g-tab is-on" data-page="hot">Hot Topics</button>
+    <button class="g-tab" data-page="exec">Executive Overview</button>
+  </div>
+</div>
+
+<div class="g-toolbar">
+  <span class="g-var"><label>Datasource</label><span class="g-pill">Prometheus</span></span>
+  <span class="g-var"><label>env</label><span class="g-pill">PROD</span></span>
+  <span class="g-var" id="g-var-tenant"><label>tenant</label><span class="g-pill is-multi">CHANNELS +2</span></span>
+  <span class="g-var" id="g-var-cluster"><label>cluster</label><span class="g-pill is-multi">CHANNELS_NAM_PROD_COB_PHY</span></span>
+  <span class="g-var" id="g-var-topic"><label>topic</label><span class="g-pill">All</span></span>
+  <span class="g-var" id="g-var-topn"><label>top_n</label><span class="g-pill">5</span></span>
+  <span class="g-var" id="g-var-min"><label>min B/s</label><span class="g-pill">1048576</span></span>
+  <span class="g-time">
+    <span class="g-pill">Last 7 days</span>
+    <span class="g-pill">1m</span>
+  </span>
+</div>
+
+<!-- ── Page 1: Hot Topics ── -->
+<div class="g-page is-on" data-page="hot" id="g-page-hot">
+  <div class="g-canvas">
+    <div class="g-grid">
+
+      <div class="g-panel" style="grid-column:span 6;">
+        <div class="g-panel__title">Hot topics ($cluster)</div>
+        <div class="g-panel__body g-stat g-stat--orange-strong g-stat--bg-orange">
+          <div class="g-stat__num">7</div>
+          <div class="g-stat__label">topics &gt; 1 MB/s</div>
+        </div>
+      </div>
+      <div class="g-panel" style="grid-column:span 6;">
+        <div class="g-panel__title">Total topics</div>
+        <div class="g-panel__body g-stat g-stat--blue">
+          <div class="g-stat__num">338</div>
+          <div class="g-stat__label">on selected cluster</div>
+        </div>
+      </div>
+      <div class="g-panel" style="grid-column:span 6;">
+        <div class="g-panel__title">Top topic</div>
+        <div class="g-panel__body g-stat" style="color:var(--g-orange);">
+          <div class="g-stat__num g-mono" style="font-size:16px;font-weight:500;">channels.payment.events</div>
+          <div class="g-stat__label">highest 1m bytes</div>
+        </div>
+      </div>
+      <div class="g-panel" style="grid-column:span 6;">
+        <div class="g-panel__title">Top topic throughput</div>
+        <div class="g-panel__body g-stat g-stat--orange g-stat--bg-orange">
+          <div class="g-stat__num">142 <span style="font-size:18px;color:var(--g-text-mute);">MB/s</span></div>
+          <div class="g-stat__label">bytes in + out, 1m rate</div>
+        </div>
+      </div>
+
+      <div class="g-panel" style="grid-column:span 12;">
+        <div class="g-panel__title">Top 5 by bytes in + out (1m rate)</div>
+        <div class="g-panel__body g-bargauge" id="g-bg-bytes"></div>
+      </div>
+      <div class="g-panel" style="grid-column:span 12;">
+        <div class="g-panel__title">Top 5 by messages in</div>
+        <div class="g-panel__body g-bargauge" id="g-bg-msgs"></div>
+      </div>
+
+      <div class="g-panel" style="grid-column:span 12;">
+        <div class="g-panel__title">Top 5 by log size on disk</div>
+        <div class="g-panel__body g-bargauge" id="g-bg-log"></div>
+      </div>
+      <div class="g-panel" style="grid-column:span 12;">
+        <div class="g-panel__title">Top 5 by request rate (produce + fetch)</div>
+        <div class="g-panel__body g-bargauge" id="g-bg-req"></div>
+      </div>
+
+      <div class="g-panel" style="grid-column:span 24;">
+        <div class="g-panel__title">Top 5 hot topics — bytes in + out trend (last 7 days)</div>
+        <div class="g-panel__body" style="height:240px;"><div class="g-chart"><canvas id="g-trend"></canvas></div></div>
+      </div>
+
+      <div class="g-panel" style="grid-column:span 14;">
+        <div class="g-panel__title">Trending up — 24h vs 7d average</div>
+        <div class="g-panel__body" style="overflow:auto;">
+          <table class="g-table">
+            <thead><tr><th>Topic</th><th style="text-align:right;">24h avg</th><th style="text-align:right;">7d avg</th><th style="text-align:right;">Δ (24h vs 7d)</th></tr></thead>
+            <tbody id="g-trending"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="g-panel" style="grid-column:span 10;">
+        <div class="g-panel__title">Bytes-in share by tenant</div>
+        <div class="g-panel__body" style="height:240px;"><div class="g-chart"><canvas id="g-donut"></canvas></div></div>
+      </div>
+
+      <div class="g-panel" style="grid-column:span 24;">
+        <div class="g-panel__title">Drill-down: channels.payment.events — bytes in / bytes out / messages</div>
+        <div class="g-panel__body" style="height:200px;"><div class="g-chart"><canvas id="g-drill"></canvas></div></div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- ── Page 2: Executive Overview ── -->
+<div class="g-page" data-page="exec" id="g-page-exec">
+  <div class="g-canvas">
+    <div class="g-grid">
+
+      <div class="g-panel" style="grid-column:span 6;">
+        <div class="g-panel__title">Total clusters</div>
+        <div class="g-panel__body g-stat g-stat--blue g-stat--bg-blue">
+          <div class="g-stat__num">37</div>
+          <div class="g-stat__label">clusters in PROD</div>
+        </div>
+      </div>
+      <div class="g-panel" style="grid-column:span 6;">
+        <div class="g-panel__title">Healthy</div>
+        <div class="g-panel__body g-stat g-stat--green g-stat--bg-green">
+          <div class="g-stat__num">34</div>
+          <div class="g-stat__label">URP=0, offline=0, 1 controller</div>
+        </div>
+      </div>
+      <div class="g-panel" style="grid-column:span 6;">
+        <div class="g-panel__title">Degraded</div>
+        <div class="g-panel__body g-stat g-stat--orange g-stat--bg-orange">
+          <div class="g-stat__num">2</div>
+          <div class="g-stat__label">URP &gt; 0</div>
+        </div>
+      </div>
+      <div class="g-panel" style="grid-column:span 6;">
+        <div class="g-panel__title">Down</div>
+        <div class="g-panel__body g-stat g-stat--red g-stat--bg-red">
+          <div class="g-stat__num">1</div>
+          <div class="g-stat__label">offline partitions or no controller</div>
+        </div>
+      </div>
+
+      <div class="g-panel" style="grid-column:span 24;">
+        <div class="g-panel__title">Estate health history (7 days)</div>
+        <div class="g-panel__body" style="height:220px;"><div class="g-chart"><canvas id="g-stack"></canvas></div></div>
+      </div>
+
+      <div class="g-panel" style="grid-column:span 24;">
+        <div class="g-panel__title">Cluster status — current (sorted by offline desc)</div>
+        <div class="g-panel__body" style="overflow:auto;">
+          <table class="g-table">
+            <thead><tr>
+              <th>Cluster</th><th style="text-align:right;">Under-replicated</th><th style="text-align:right;">Offline</th><th style="text-align:right;">Active controllers</th><th style="text-align:right;">Bytes in/s</th><th style="text-align:right;">Bytes out/s</th><th style="text-align:right;">Topics</th>
+            </tr></thead>
+            <tbody id="g-clusters"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<script>
+(function(){
+  const root=document.getElementById('g-root');
+  const titleEl=document.getElementById('g-title');
+  const tabsEl=root.querySelector('.g-tabs');
+  const fmtMB=(b)=>(b>=1?b.toFixed(0)+' MB/s':(b*1024).toFixed(0)+' KB/s');
+  const fmtMsg=(m)=>m>=1000?Math.round(m/1000)+'k/s':Math.round(m)+'/s';
+  const fmtGB=(g)=>g.toFixed(1)+' GB';
+  const fmtReq=(r)=>r>=1000?(r/1000).toFixed(1)+'k req/s':Math.round(r)+' req/s';
+  const fmtPct=(p)=>(p>=0?'+':'')+(p*100).toFixed(0)+'%';
+
+  // Tabs
+  tabsEl.addEventListener('click',(e)=>{
+    const b=e.target.closest('button');if(!b)return;
+    tabsEl.querySelectorAll('button').forEach(x=>x.classList.remove('is-on'));
+    b.classList.add('is-on');
+    const page=b.dataset.page;
+    root.querySelectorAll('.g-page').forEach(p=>p.classList.toggle('is-on',p.dataset.page===page));
+    titleEl.textContent=page==='hot'?'LenseIQ — Kafka Hot Topics':'LenseIQ — Executive Overview';
+    if(page==='exec') drawExec();
+  });
+
+  // ── Hot Topics page ──
+
+  function bargauge(elId,rows,fmt,colorRamp){
+    const max=Math.max(...rows.map(r=>r.v));
+    const el=document.getElementById(elId);el.innerHTML='';
+    rows.forEach((r,i)=>{
+      const pct=Math.max(8,(r.v/max)*100);
+      const color=colorRamp[i]||colorRamp[colorRamp.length-1];
+      const row=document.createElement('div');row.className='g-bg-row';
+      row.innerHTML='<span class="g-bg-row__label g-mono">'+r.t+'</span>'+
+        '<span class="g-bg-row__val">'+fmt(r.v)+'</span>'+
+        '<span class="g-bg-row__bar"><span class="g-bg-row__fill" style="width:'+pct.toFixed(1)+'%;background:'+color+';"></span></span>';
+      el.appendChild(row);
+    });
+  }
+  const yellowOrangeRed=['#56a64b','#aaaa3f','#ddc056','#ff9830','#e02f44'];
+  const blueRamp=['#3274d9','#5294e0','#7faae8','#a8c4ee','#cfddf4'];
+  const greenRedRamp=['#56a64b','#9bc14a','#d6c14b','#ff9830','#e02f44'];
+  const tealCoral=['#37d3a3','#5fc7a8','#a4b89c','#d99c7c','#e36b5d'];
+
+  bargauge('g-bg-bytes',[
+    {t:'channels.payment.events',v:142},
+    {t:'csf.ledger.txn',v:96},
+    {t:'channels.notify.outbound',v:64},
+    {t:'audit.firmwide.log',v:48},
+    {t:'express.shipments.events',v:31},
+  ],fmtMB,yellowOrangeRed.slice().reverse());
+
+  bargauge('g-bg-msgs',[
+    {t:'audit.firmwide.log',v:184000},
+    {t:'channels.payment.events',v:96000},
+    {t:'csf.ledger.txn',v:54000},
+    {t:'dda.account.updates',v:31000},
+    {t:'express.shipments.events',v:24000},
+  ],fmtMsg,blueRamp);
+
+  bargauge('g-bg-log',[
+    {t:'audit.firmwide.log',v:1820},
+    {t:'channels.payment.events',v:612},
+    {t:'telemetry.metrics.raw',v:418},
+    {t:'csf.ledger.txn',v:289},
+    {t:'express.shipments.events',v:188},
+  ],fmtGB,greenRedRamp);
+
+  bargauge('g-bg-req',[
+    {t:'channels.payment.events',v:14200},
+    {t:'csf.ledger.txn',v:11800},
+    {t:'dda.account.updates',v:7400},
+    {t:'audit.firmwide.log',v:5200},
+    {t:'express.shipments.events',v:3100},
+  ],fmtReq,tealCoral);
+
+  // Trending up table
+  const trending=[
+    {t:'express.shipments.events',a:31,b:14,d:1.21},
+    {t:'channels.payment.events',a:142,b:118,d:0.20},
+    {t:'csf.ledger.txn',a:96,b:88,d:0.09},
+    {t:'dda.account.updates',a:38,b:39,d:-0.03},
+    {t:'channels.notify.outbound',a:64,b:71,d:-0.10},
+    {t:'audit.firmwide.log',a:48,b:54,d:-0.11},
+    {t:'telemetry.metrics.raw',a:31,b:36,d:-0.14},
+  ];
+  const tbody=document.getElementById('g-trending');
+  trending.forEach(r=>{
+    const cls=r.d>=1?'g-cell-bg--red':r.d>=0.3?'g-cell-bg--orange':r.d>=0.1?'g-cell-bg--yellow':r.d>=-0.1?'g-cell-bg--green':'g-cell-bg--blue';
+    const tr=document.createElement('tr');
+    tr.innerHTML='<td class="g-mono"><a class="g-link">'+r.t+'</a></td>'+
+      '<td style="text-align:right;">'+fmtMB(r.a)+'</td>'+
+      '<td style="text-align:right;">'+fmtMB(r.b)+'</td>'+
+      '<td style="text-align:right;"><span class="g-cell-bg '+cls+'">'+fmtPct(r.d)+'</span></td>';
+    tbody.appendChild(tr);
+  });
+
+  // Charts — wait for streaming to finish
+  function ready(fn){
+    if(typeof Chart==='undefined'){setTimeout(()=>ready(fn),60);return;}
+    fn();
+  }
+
+  function makeSeries(seed,len,base,vol){const out=[];let s=seed;for(let i=0;i<len;i++){s=(s*9301+49297)%233280;const r=s/233280;out.push(Math.max(0,base*(1+(r-0.5)*vol)));}return out;}
+  function labels7d(n){const out=[];for(let i=n-1;i>=0;i--){const h=i*((7*24)/(n-1));out.push(h===0?'now':'-'+Math.round(h)+'h');}return out;}
+
+  Chart.defaults.color='#8e8e99';
+  Chart.defaults.borderColor='rgba(204,204,220,0.07)';
+  Chart.defaults.font.family="-apple-system,'Segoe UI',Roboto,sans-serif";
+  Chart.defaults.font.size=11;
+
+  ready(function(){
+    // Top 5 trend
+    const N=42;
+    const labelsT=labels7d(N);
+    const topics=[
+      {t:'channels.payment.events',c:'#ff9830',base:118,vol:0.55,seed:11},
+      {t:'csf.ledger.txn',c:'#3274d9',base:88,vol:0.5,seed:22},
+      {t:'channels.notify.outbound',c:'#56a64b',base:71,vol:0.45,seed:33},
+      {t:'audit.firmwide.log',c:'#9d4edd',base:54,vol:0.5,seed:44},
+      {t:'express.shipments.events',c:'#37d3a3',base:14,vol:0.8,seed:55},
+    ];
+    new Chart(document.getElementById('g-trend').getContext('2d'),{
+      type:'line',
+      data:{labels:labelsT,datasets:topics.map(t=>({label:t.t,data:makeSeries(t.seed,N,t.base,t.vol),borderColor:t.c,backgroundColor:t.c+'22',borderWidth:1.5,fill:false,tension:0.3,pointRadius:0,pointHoverRadius:4}))},
+      options:{
+        responsive:true,maintainAspectRatio:false,
+        interaction:{mode:'index',intersect:false},
+        plugins:{
+          legend:{position:'right',labels:{boxWidth:10,boxHeight:10,padding:8,font:{size:11}}},
+          tooltip:{backgroundColor:'#1f2228',borderColor:'rgba(204,204,220,0.15)',borderWidth:1,callbacks:{label:(c)=>c.dataset.label+': '+fmtMB(c.parsed.y)}}
+        },
+        scales:{
+          x:{ticks:{maxTicksLimit:8},grid:{color:'rgba(204,204,220,0.05)'}},
+          y:{ticks:{callback:(v)=>fmtMB(v)},grid:{color:'rgba(204,204,220,0.05)'}}
+        }
+      }
+    });
+
+    // Donut tenant share
+    new Chart(document.getElementById('g-donut').getContext('2d'),{
+      type:'doughnut',
+      data:{
+        labels:['CHANNELS','CSF','EXPRESS','DDA','AUDIT'],
+        datasets:[{data:[42,21,14,12,11],backgroundColor:['#ff9830','#3274d9','#37d3a3','#9d4edd','#56a64b'],borderColor:'#181b1f',borderWidth:2}]
+      },
+      options:{
+        responsive:true,maintainAspectRatio:false,cutout:'62%',
+        plugins:{
+          legend:{position:'right',labels:{boxWidth:10,boxHeight:10,padding:8,font:{size:11},generateLabels:(c)=>{const ds=c.data.datasets[0].data;const sum=ds.reduce((a,b)=>a+b,0);return c.data.labels.map((l,i)=>({text:l+'  '+((ds[i]/sum)*100).toFixed(0)+'%',fillStyle:c.data.datasets[0].backgroundColor[i],strokeStyle:c.data.datasets[0].backgroundColor[i],lineWidth:0,index:i}));}}},
+          tooltip:{backgroundColor:'#1f2228'}
+        }
+      }
+    });
+
+    // Drill-down (3 lines)
+    const N2=72;
+    const labelsD=Array.from({length:N2},(_,i)=>{const h=(N2-1-i)*1;return h===0?'now':'-'+h+'h';});
+    new Chart(document.getElementById('g-drill').getContext('2d'),{
+      type:'line',
+      data:{labels:labelsD,datasets:[
+        {label:'bytes in',data:makeSeries(101,N2,80,0.45),borderColor:'#3274d9',backgroundColor:'#3274d922',borderWidth:1.4,fill:true,tension:0.3,pointRadius:0,pointHoverRadius:4,yAxisID:'y'},
+        {label:'bytes out',data:makeSeries(102,N2,62,0.5),borderColor:'#37d3a3',backgroundColor:'#37d3a322',borderWidth:1.4,fill:true,tension:0.3,pointRadius:0,pointHoverRadius:4,yAxisID:'y'},
+        {label:'messages in',data:makeSeries(103,N2,55,0.55),borderColor:'#ff9830',backgroundColor:'#ff983022',borderWidth:1.4,fill:false,tension:0.3,pointRadius:0,pointHoverRadius:4,yAxisID:'y2'},
+      ]},
+      options:{
+        responsive:true,maintainAspectRatio:false,interaction:{mode:'index',intersect:false},
+        plugins:{
+          legend:{position:'right',labels:{boxWidth:10,boxHeight:10,padding:8,font:{size:11}}},
+          tooltip:{backgroundColor:'#1f2228'}
+        },
+        scales:{
+          x:{ticks:{maxTicksLimit:6},grid:{color:'rgba(204,204,220,0.05)'}},
+          y:{position:'left',ticks:{callback:(v)=>fmtMB(v)},grid:{color:'rgba(204,204,220,0.05)'},title:{display:true,text:'bytes',color:'#8e8e99',font:{size:10}}},
+          y2:{position:'right',ticks:{callback:(v)=>fmtMsg(v*1000)},grid:{display:false},title:{display:true,text:'msg/s',color:'#8e8e99',font:{size:10}}}
+        }
+      }
+    });
+  });
+
+  // ── Executive page (lazy-init) ──
+  let execDrawn=false;
+  function drawExec(){
+    if(execDrawn)return;execDrawn=true;
+    ready(function(){
+      // Stacked health history
+      const days=7,N=days*4;
+      const labelsE=Array.from({length:N},(_,i)=>{const d=Math.floor((N-1-i)/4);return d===0?'today':'-'+d+'d';});
+      function st(seed,base,vol){return makeSeries(seed,N,base,vol).map(Math.round);}
+      new Chart(document.getElementById('g-stack').getContext('2d'),{
+        type:'bar',
+        data:{labels:labelsE,datasets:[
+          {label:'healthy',data:st(701,33,0.04),backgroundColor:'#56a64b',stack:'h',borderWidth:0},
+          {label:'degraded',data:st(702,2.5,0.6),backgroundColor:'#ff9830',stack:'h',borderWidth:0},
+          {label:'down',data:st(703,1,0.9),backgroundColor:'#e02f44',stack:'h',borderWidth:0},
+        ]},
+        options:{
+          responsive:true,maintainAspectRatio:false,
+          plugins:{legend:{position:'bottom',labels:{boxWidth:10,boxHeight:10,padding:10,font:{size:11}}},tooltip:{mode:'index',backgroundColor:'#1f2228'}},
+          scales:{
+            x:{stacked:true,ticks:{maxTicksLimit:8},grid:{display:false}},
+            y:{stacked:true,beginAtZero:true,suggestedMax:40,grid:{color:'rgba(204,204,220,0.05)'}}
+          }
+        }
+      });
+
+      // Cluster table
+      const clusters=[
+        {n:'EXPRESS_EMEA_PROD_COB_PHY',urp:0,off:12,ctrl:0,bin:1.4,bout:1.8,topics:142},
+        {n:'CHANNELS_NAM_PROD_COB_Prober',urp:24,off:0,ctrl:1,bin:0.3,bout:0.4,topics:48},
+        {n:'CSF_NAM_PROD_COB',urp:6,off:0,ctrl:1,bin:18.4,bout:22.1,topics:218},
+        {n:'CHANNELS_NAM_PROD_COB_PHY',urp:0,off:0,ctrl:1,bin:42.6,bout:51.8,topics:338},
+        {n:'CHANNELS_IDL_PROD_COB_PHY',urp:0,off:0,ctrl:1,bin:14.2,bout:18.0,topics:184},
+        {n:'EXPRESS_APAC_PROD_COB_PHY',urp:0,off:0,ctrl:1,bin:8.7,bout:10.4,topics:96},
+        {n:'EXPRESS_APAC_PROD_COB_VM',urp:0,off:0,ctrl:1,bin:6.1,bout:7.2,topics:88},
+        {n:'DDA_NAM_PROD_VM',urp:0,off:0,ctrl:1,bin:3.4,bout:4.1,topics:64},
+      ];
+      const cb=document.getElementById('g-clusters');
+      function cell(v,thresh){
+        // thresh = [okMax, warnMax]
+        const cls=v===0?'g-cell-bg--green':v<=thresh[0]?'g-cell-bg--yellow':v<=thresh[1]?'g-cell-bg--orange':'g-cell-bg--red';
+        return '<span class="g-cell-bg '+cls+'">'+v+'</span>';
+      }
+      function ctrlCell(c){
+        if(c===1)return '<span class="g-cell-bg g-cell-bg--green">1</span>';
+        if(c===0)return '<span class="g-cell-bg g-cell-bg--red">0</span>';
+        return '<span class="g-cell-bg g-cell-bg--red">'+c+'</span>';
+      }
+      clusters.forEach(c=>{
+        const tr=document.createElement('tr');
+        tr.innerHTML='<td class="g-mono"><a class="g-link">'+c.n+'</a></td>'+
+          '<td style="text-align:right;">'+cell(c.urp,[5,30])+'</td>'+
+          '<td style="text-align:right;">'+cell(c.off,[0,5])+'</td>'+
+          '<td style="text-align:right;">'+ctrlCell(c.ctrl)+'</td>'+
+          '<td style="text-align:right;">'+c.bin.toFixed(1)+' MB/s</td>'+
+          '<td style="text-align:right;">'+c.bout.toFixed(1)+' MB/s</td>'+
+          '<td style="text-align:right;">'+c.topics+'</td>';
+        cb.appendChild(tr);
+      });
+    });
+  }
+
+})();
+</script>
